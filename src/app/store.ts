@@ -196,6 +196,8 @@ const SESSION_KEY = 'vms.session';
 interface PersistedSession {
   role: Role;
   currentUserId: string;
+  /** The dataset size chosen in Admin, so a reload does not silently drop it. */
+  visitCount?: number;
 }
 
 function readSession(): PersistedSession | null {
@@ -207,13 +209,17 @@ function readSession(): PersistedSession | null {
   }
 }
 
-function writeSession(session: PersistedSession): void {
+function writeSession(patch: Partial<PersistedSession>): void {
   try {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    const next = { ...readSession(), ...patch };
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
   } catch {
     // Storage unavailable - the app works fine, it just will not remember.
   }
 }
+
+/** Records generated at boot when the user has not chosen a size. */
+const DEFAULT_VISIT_COUNT = 2_000;
 
 /* ------------------------------------------------------------------ *
  * Store
@@ -237,8 +243,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   /* ---------------------------- bootstrap --------------------------- */
 
-  async bootstrap(visitCount = 2_000) {
+  async bootstrap(visitCount = readSession()?.visitCount ?? DEFAULT_VISIT_COUNT) {
     set({ booting: true, bootError: null });
+    writeSession({ visitCount });
     try {
       // Yield a frame first so the loading state actually paints before the
       // synchronous generate+index work blocks the main thread.

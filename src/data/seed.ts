@@ -178,7 +178,6 @@ export function generateSeedData(options: SeedOptions): SeedResult {
       scheduledEnd = scheduledStart + int(1, 6) * 30 * 60_000;
     }
 
-    const source: VisitSource = weightedSource(rand());
     const { status, checkInAt, checkOutAt, checkInMethod } = isLive
       ? {
           status: 'CHECKED_IN' as const,
@@ -187,6 +186,11 @@ export function generateSeedData(options: SeedOptions): SeedResult {
           checkInMethod: (rand() < 0.5 ? 'SELF' : 'FRONT_DESK') as CheckInMethod,
         }
       : deriveSeedStatus(rand, scheduledStart, scheduledEnd, now);
+
+    // Source is chosen *after* status so the two cannot contradict each other:
+    // a pre-approved visit is by definition already approved, so it can never
+    // also be awaiting approval.
+    const source: VisitSource = pickSource(rand(), status);
 
     visits.push({
       id: `vst-${i}`,
@@ -241,9 +245,21 @@ function weightedHour(rand: () => number): number {
   return 10;
 }
 
-function weightedSource(roll: number): VisitSource {
-  if (roll < 0.45) return 'INVITE';
-  if (roll < 0.75) return 'PRE_APPROVAL';
+/**
+ * How the visit came about, constrained by the state it ended up in.
+ *
+ * `PRE_APPROVAL` means the host approved in advance and an e-pass was issued,
+ * so it is only valid for visits that were in fact approved. Choosing the two
+ * independently produced rows reading "Pre-approved - e-pass" next to a status
+ * of "Awaiting approval", which is nonsense a reviewer would spot immediately.
+ */
+function pickSource(roll: number, status: VisitStatus): VisitSource {
+  const wasNeverApproved = status === 'PENDING_APPROVAL' || status === 'REJECTED';
+  if (wasNeverApproved) {
+    return roll < 0.65 ? 'INVITE' : 'WALK_IN';
+  }
+  if (roll < 0.4) return 'INVITE';
+  if (roll < 0.8) return 'PRE_APPROVAL';
   return 'WALK_IN';
 }
 
@@ -294,6 +310,12 @@ function deriveSeedStatus(
     // Stayed past the window and never checked out - an OVERSTAY.
     return { status: 'OVERSTAY', checkInAt, checkInMethod: method };
   }
-  const checkOutAt = scheduledEnd - Math.floor(rand() * 20 * 60_000);
+  /*
+   * Clamp the departure to after the arrival. The two offsets are drawn
+   * independently, so on a 30-minute visit a late arrival (+15 min) could
+   * otherwise precede an early departure (-20 min) and produce a visitor who
+   * left before they got there.
+   */
+  const checkOutAt = Math.max(checkInAt + 5 * 60_000, scheduledEnd - Math.floor(rand() * 20 * 60_000));
   return { status: 'CHECKED_OUT', checkInAt, checkOutAt, checkInMethod: method };
 }
