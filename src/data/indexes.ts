@@ -107,8 +107,15 @@ export class VisitIndex {
   private visitorSearch = new SearchIndex();
   private hostSearch = new SearchIndex();
 
-  /** Memoised results for repeated filter combinations (simple LRU). */
-  private queryCache = new Map<string, string[]>();
+  /**
+   * Memoised results for repeated filter combinations (simple LRU).
+   *
+   * The stats are cached with the ids on purpose: a cache hit did no work, so
+   * reporting zeros would make the performance readout in the UI look like it
+   * was making numbers up. Instead a hit replays the measurement from when the
+   * query really ran, flagged with `cached: true`.
+   */
+  private queryCache = new Map<string, { ids: string[]; stats: QueryStats }>();
 
   lastStats: QueryStats = {
     matched: 0,
@@ -257,6 +264,34 @@ export class VisitIndex {
   }
 
   /**
+   * Type-ahead over employees, for "search by name, id, email or phone" when
+   * picking a host. Capped at `limit` because a dropdown showing 500 people is
+   * no more useful than one showing 8, and rendering it costs more.
+   */
+  searchEmployees(text: string, limit = 8): Employee[] {
+    if (!text.trim()) return [];
+    const out: Employee[] = [];
+    for (const id of this.hostSearch.search(text)) {
+      const employee = this.employees.get(id);
+      if (employee) out.push(employee);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /** Type-ahead over past visitors, for the invite form's guest search. */
+  searchVisitors(text: string, limit = 8): Visitor[] {
+    if (!text.trim()) return [];
+    const out: Visitor[] = [];
+    for (const id of this.visitorSearch.search(text)) {
+      const visitor = this.visitors.get(id);
+      if (visitor) out.push(visitor);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /**
    * The main query. Returns visit ids, already sorted and ready to hand to the
    * virtualiser. See the class comment for the three plans.
    */
@@ -269,14 +304,8 @@ export class VisitIndex {
       // Refresh recency for the LRU by re-inserting at the end of the Map.
       this.queryCache.delete(cacheKey);
       this.queryCache.set(cacheKey, cached);
-      this.lastStats = {
-        matched: cached.length,
-        scanned: 0,
-        durationMs: performance.now() - started,
-        plan: this.lastStats.plan,
-        cached: true,
-      };
-      return cached;
+      this.lastStats = { ...cached.stats, cached: true };
+      return cached.ids;
     }
 
     const sortBy = q.sortBy ?? 'entry';
@@ -399,7 +428,7 @@ export class VisitIndex {
       cached: false,
     };
 
-    this.queryCache.set(cacheKey, ids);
+    this.queryCache.set(cacheKey, { ids, stats: this.lastStats });
     if (this.queryCache.size > QUERY_CACHE_LIMIT) {
       // Map preserves insertion order, so the first key is the least recent.
       const oldest = this.queryCache.keys().next().value;

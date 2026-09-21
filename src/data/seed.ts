@@ -143,27 +143,50 @@ export function generateSeedData(options: SeedOptions): SeedResult {
   const visits: Visit[] = [];
   const today = startOfDay(now);
 
+  /*
+   * A slice of the dataset is forced to be happening *right now*.
+   *
+   * Left purely to chance, a dataset spread over 97 days almost never contains
+   * a visit that is in progress at the moment the page loads, so the front
+   * desk's "Inside" filter and the overstay ticker would both open empty - the
+   * two things most worth looking at. These visits are generated the same way
+   * as the rest; only their timing is pinned.
+   */
+  const liveCount = Math.max(8, Math.round(visitCount * 0.02));
+
   for (let i = 0; i < visitCount; i++) {
     const visitor = visitors[Math.floor(rand() * visitors.length)];
     const host = employees[Math.floor(rand() * employees.length)];
 
-    // Day offset: mostly history, a slice today, a few upcoming.
-    const dayOffset = int(-HISTORY_DAYS, FUTURE_DAYS);
-    const day = today + dayOffset * MS_PER_DAY;
+    const isLive = i < liveCount;
 
-    // Visits cluster in office hours, with a peak around 10am and 3pm.
-    const startHour = weightedHour(rand);
-    const scheduledStart = day + startHour * MS_PER_HOUR + int(0, 3) * 15 * 60_000;
-    const durationMs = int(1, 6) * 30 * 60_000;
-    const scheduledEnd = scheduledStart + durationMs;
+    let scheduledStart: number;
+    let scheduledEnd: number;
+
+    if (isLive) {
+      // Started up to 2.5 hours ago, running for another 0.5-3 hours.
+      scheduledStart = now - int(0, 150) * 60_000;
+      scheduledEnd = now + int(30, 180) * 60_000;
+    } else {
+      // Day offset: mostly history, a slice today, a few upcoming.
+      const dayOffset = int(-HISTORY_DAYS, FUTURE_DAYS);
+      const day = today + dayOffset * MS_PER_DAY;
+
+      // Visits cluster in office hours, with a peak around 10am and 3pm.
+      const startHour = weightedHour(rand);
+      scheduledStart = day + startHour * MS_PER_HOUR + int(0, 3) * 15 * 60_000;
+      scheduledEnd = scheduledStart + int(1, 6) * 30 * 60_000;
+    }
 
     const source: VisitSource = weightedSource(rand());
-    const { status, checkInAt, checkOutAt, checkInMethod } = deriveSeedStatus(
-      rand,
-      scheduledStart,
-      scheduledEnd,
-      now,
-    );
+    const { status, checkInAt, checkOutAt, checkInMethod } = isLive
+      ? {
+          status: 'CHECKED_IN' as const,
+          checkInAt: scheduledStart + int(0, 8) * 60_000,
+          checkOutAt: undefined,
+          checkInMethod: (rand() < 0.5 ? 'SELF' : 'FRONT_DESK') as CheckInMethod,
+        }
+      : deriveSeedStatus(rand, scheduledStart, scheduledEnd, now);
 
     visits.push({
       id: `vst-${i}`,
