@@ -23,7 +23,7 @@ The original six-day plan is in git history.
 - [x] Query planner with three strategies + live stats readout
 - [x] Deterministic seeded generator (1k / 10k / 50k, runtime switchable)
 - [x] Fair benchmark vs. naive `Array.filter` — `npm run bench`
-- [x] 22 unit tests, including planner equivalence against a brute-force reference
+- [x] 31 unit tests: domain rules, query-planner equivalence, and seeded-data invariants
 - [x] Front desk visitor table: virtualised, searchable, filterable, sortable, URL-synced
 - [x] Guest details drawer with timeline, e-pass, check-out
 - [x] Walk-in registration with webcam photo capture + upload fallback

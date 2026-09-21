@@ -23,7 +23,7 @@ npm run dev
 |---|---|
 | `npm run dev` | Dev server |
 | `npm run build` | Type-check and build for production |
-| `npm test` | Unit tests (22 tests) |
+| `npm test` | Unit tests (31 tests) |
 | `npm run bench` | Performance benchmark vs. the naive implementation |
 | `npm run typecheck` | Type-check only |
 
