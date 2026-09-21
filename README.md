@@ -208,4 +208,6 @@ Known limits, and what each would take:
 | [`docs/COMPLEXITY.md`](docs/COMPLEXITY.md) | Big-O analysis, data structures, query planner, measured benchmarks, memory, scaling limits |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Layering, state management, data flow, design decisions and trade-offs |
 | [`docs/DEMO.md`](docs/DEMO.md) | Demonstration walkthrough, including the error cases |
+| [`docs/TYPESCRIPT-NOTES.md`](docs/TYPESCRIPT-NOTES.md) | Every TypeScript construct used in the repo, and why |
+| [`docs/PLAN.md`](docs/PLAN.md) | Scope decisions, what was deliberately left out, and why |
 | [`docs/reference/`](docs/reference) | The wireframes and requirements extracted from the brief |
