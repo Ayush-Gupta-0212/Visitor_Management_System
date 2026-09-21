@@ -144,7 +144,7 @@ export class VisitIndex {
       this.timeline.push({ ts: entryKey(visit), id: visit.id });
     }
 
-    this.timeline.sort((a, b) => a.ts - b.ts);
+    this.timeline.sort(compareEntries);
   }
 
   clear(): void {
@@ -473,20 +473,37 @@ export class VisitIndex {
     return out;
   }
 
+  /**
+   * Orders two visits by the requested column.
+   *
+   * Ties are broken by id, which makes the ordering *total*. That is not a
+   * cosmetic detail: the query planner may answer the same question with
+   * different plans, and without a tie-break two visits recorded in the same
+   * millisecond would come back in a different order depending on which plan
+   * ran - so rows would visibly swap places as the dataset grew. The
+   * planner-equivalence test in `indexes.test.ts` fails without this.
+   */
   private compare(a: Visit, b: Visit, key: SortKey): number {
+    let result = 0;
     switch (key) {
       case 'entry':
-        return entryKey(a) - entryKey(b);
+        result = entryKey(a) - entryKey(b);
+        break;
       case 'exit':
-        return (a.checkOutAt ?? a.scheduledEnd) - (b.checkOutAt ?? b.scheduledEnd);
+        result = (a.checkOutAt ?? a.scheduledEnd) - (b.checkOutAt ?? b.scheduledEnd);
+        break;
       case 'status':
-        return a.status < b.status ? -1 : a.status > b.status ? 1 : 0;
+        result = a.status < b.status ? -1 : a.status > b.status ? 1 : 0;
+        break;
       case 'visitor': {
         const an = this.visitors.get(a.visitorId)?.fullName ?? '';
         const bn = this.visitors.get(b.visitorId)?.fullName ?? '';
-        return an < bn ? -1 : an > bn ? 1 : 0;
+        result = an < bn ? -1 : an > bn ? 1 : 0;
+        break;
       }
     }
+    if (result !== 0) return result;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   }
 }
 
@@ -529,9 +546,21 @@ export function upperBound(arr: { ts: number }[], target: number): number {
   return lo;
 }
 
-/** Keeps the timeline sorted on single inserts. O(log n) search + O(n) shift. */
+/** Total order on timeline entries: by timestamp, then by id. See `compare()`. */
+function compareEntries(a: TimeEntry, b: TimeEntry): number {
+  if (a.ts !== b.ts) return a.ts - b.ts;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Keeps the timeline sorted on single inserts. Binary-searches to the start of
+ * the run of equal timestamps, then walks it to honour the id tie-break.
+ * O(log n) search + O(n) shift for the splice.
+ */
 function insertSorted(arr: TimeEntry[], entry: TimeEntry): void {
-  arr.splice(lowerBound(arr, entry.ts), 0, entry);
+  let i = lowerBound(arr, entry.ts);
+  while (i < arr.length && arr[i].ts === entry.ts && arr[i].id < entry.id) i++;
+  arr.splice(i, 0, entry);
 }
 
 /**
