@@ -6,3 +6,9 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .env
+
+# build artefacts
+*.tsbuildinfo
+
+# local tooling
+.claude/
