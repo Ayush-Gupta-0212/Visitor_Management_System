@@ -1,127 +1,108 @@
 @import 'tailwindcss';
+@config '../tailwind.config.js';
 
 /*
- * Design tokens.
- *
- * Colours are declared once here and referenced as Tailwind utilities
- * (bg-brand, text-muted, ...). Nothing in a component hard-codes a hex value,
- * so the palette can be re-themed in one place - and the dark theme below only
- * has to override these variables rather than touch any component.
+ * Motion: every transition-* utility runs 120ms on the spec's precise curve.
+ * These live here rather than in tailwind.config.js because the transition
+ * utilities read them as live CSS variables. JS-config values get inlined,
+ * so this pair would never be emitted and transitions would drop to 0s.
  */
 @theme {
-  --color-brand: #1d3fbe;
-  --color-brand-hover: #16339b;
-  --color-brand-soft: #e8edff;
-
-  --color-surface: #ffffff;
-  --color-canvas: #f6f7fb;
-  --color-line: #e3e6ef;
-
-  --color-ink: #10142a;
-  --color-muted: #5b6278;
-
-  --color-danger: #c2153c;
-  --color-danger-soft: #fdeaee;
-  --color-warn: #8a5300;
-  --color-warn-soft: #fff4e0;
-  --color-ok: #0c6b46;
-  --color-ok-soft: #e4f6ed;
-
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --default-transition-duration: 120ms;
+  --default-transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /*
- * Dark theme. Applied when the OS asks for it, unless the user has explicitly
- * chosen light, and always when they have explicitly chosen dark.
+ * Design tokens: "Precision Enterprise VMS" (Google Stitch project 7446685014118773496).
+ * Values follow the DESIGN.md colour spec. tailwind.config.js exposes them as
+ * utilities, e.g. bg-surface, text-muted-foreground, border-danger-border.
  */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --color-brand: #7e9bff;
-    --color-brand-hover: #94aaff;
-    --color-brand-soft: #1b2450;
+:root {
+  /* Canvas & surfaces */
+  --background: #f8fafc; /* slate-50 · app backdrop */
+  --surface: #ffffff; /* cards, tables, inputs, overlays */
+  --surface-hover: #f8fafc; /* slate-50 · row & outline-control hover */
+  --muted: #f1f5f9; /* slate-100 · segmented tracks, kbd hints, inert fills */
+  --overlay: rgb(248 250 252 / 0.8); /* frosted scrim behind modals & sheets */
 
-    --color-surface: #131726;
-    --color-canvas: #0c0f1a;
-    --color-line: #262c42;
+  /* Text */
+  --foreground: #0f172a; /* slate-900 */
+  --muted-foreground: #64748b; /* slate-500 */
+  --placeholder: #94a3b8; /* slate-400 */
 
-    --color-ink: #eef1fa;
-    --color-muted: #99a1bb;
+  /* Hairlines */
+  --border: #e4e4e7; /* zinc-200 · 1px dividers & control borders */
+  --border-strong: #cbd5e1; /* slate-300 · hover */
 
-    --color-danger: #ff8099;
-    --color-danger-soft: #3b1420;
-    --color-warn: #ffc46b;
-    --color-warn-soft: #3a2a0c;
-    --color-ok: #5fd6a4;
-    --color-ok-soft: #0f2f22;
+  /* Primary */
+  --primary: #0f172a; /* slate-900 */
+  --primary-hover: #1e293b; /* slate-800 */
+  --primary-foreground: #ffffff;
+  --ring: #0f172a;
+
+  /* Status: checked-in, authorised access */
+  --success: #059669; /* emerald-600 */
+  --success-subtle: #ecfdf5; /* emerald-50 */
+  --success-strong: #047857; /* emerald-700 */
+  --success-border: #a7f3d0; /* emerald-200 (derived, mirrors danger) */
+  --success-dot: #10b981; /* emerald-500 */
+
+  /* Status: expected, pending verification */
+  --warning: #d97706; /* amber-600 */
+  --warning-subtle: #fffbeb; /* amber-50 */
+  --warning-strong: #92400e; /* amber-800 */
+  --warning-border: #fde68a; /* amber-200 (derived, mirrors danger) */
+  --warning-dot: #f59e0b; /* amber-500 */
+
+  /* Status: overstay, security alert, revocation */
+  --danger: #e11d48; /* rose-600 */
+  --danger-subtle: #fff1f2; /* rose-50 */
+  --danger-strong: #be123c; /* rose-700 */
+  --danger-border: #fecdd3; /* rose-200 */
+  --danger-dot: #f43f5e; /* rose-500 */
+
+  /* Status: checked-out, archived, inert */
+  --neutral: #64748b; /* slate-500 */
+  --neutral-subtle: #f1f5f9; /* slate-100 */
+  --neutral-strong: #475569; /* slate-600 */
+  --neutral-border: #e2e8f0; /* slate-200 */
+  --neutral-dot: #94a3b8; /* slate-400 */
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-background font-sans text-body-md text-foreground antialiased;
+  }
+
+  /* Tailwind v4 dropped the pointer cursor on buttons; the design expects it. */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
   }
 }
 
-:root[data-theme='dark'] {
-  --color-brand: #7e9bff;
-  --color-brand-hover: #94aaff;
-  --color-brand-soft: #1b2450;
-
-  --color-surface: #131726;
-  --color-canvas: #0c0f1a;
-  --color-line: #262c42;
-
-  --color-ink: #eef1fa;
-  --color-muted: #99a1bb;
-
-  --color-danger: #ff8099;
-  --color-danger-soft: #3b1420;
-  --color-warn: #ffc46b;
-  --color-warn-soft: #3a2a0c;
-  --color-ok: #5fd6a4;
-  --color-ok-soft: #0f2f22;
+/* Mono uppercase caption used for section labels, table headers and metadata keys. */
+@utility eyebrow {
+  @apply font-mono text-mono-code tracking-[0.04em] text-muted-foreground uppercase;
 }
 
-html,
-body,
-#root {
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  background: var(--color-canvas);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-}
-
-/* A single, always-visible focus style: the front desk flow is keyboard-first. */
-:where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-brand);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
-/* Respect users who have asked for less motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
-  *::before,
-  *::after {
+  ::before,
+  ::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-}
-
-/* Visible only to screen readers - used for live regions and table captions. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-@media print {
-  .no-print {
-    display: none !important;
+    scroll-behavior: auto !important;
   }
 }

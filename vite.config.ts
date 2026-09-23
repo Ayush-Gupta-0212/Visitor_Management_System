@@ -1,18 +1,12 @@
-import { defineConfig } from 'vitest/config';
-import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
-import { fileURLToPath, URL } from 'node:url';
+import tailwindcss from '@tailwindcss/vite'
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
 
+// https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // The dev server port comes from PORT when the harness assigns one, so this
-  // project can run alongside other local dev servers.
-  server: { port: Number(process.env.PORT) || 5173 },
   resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+    // Resolves the `@/*` alias declared in tsconfig.app.json.
+    tsconfigPaths: true,
   },
-  test: {
-    environment: 'node',
-    include: ['src/**/*.test.ts'],
-  },
-});
+})
