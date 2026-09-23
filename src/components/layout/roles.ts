@@ -1,10 +1,16 @@
 import { type LucideIcon, Settings2, ShieldCheck, UserRound } from 'lucide-react'
-import { ROLE_LABELS } from '@/lib/rbac'
 import type { Role } from '@/types/vms'
 
-/** The three perspectives, in switcher order. */
-export const ROLE_OPTIONS: readonly { value: Role; label: string; icon: LucideIcon }[] = [
-  { value: 'GATEKEEPER', label: ROLE_LABELS.GATEKEEPER, icon: ShieldCheck },
-  { value: 'HOST_EMPLOYEE', label: ROLE_LABELS.HOST_EMPLOYEE, icon: UserRound },
-  { value: 'ADMIN', label: ROLE_LABELS.ADMIN, icon: Settings2 },
-]
+/** One icon per role, used wherever a role is named: the profile menu, sign-in page and team list. */
+export const ROLE_ICONS: Record<Role, LucideIcon> = {
+  GATEKEEPER: ShieldCheck,
+  HOST_EMPLOYEE: UserRound,
+  ADMIN: Settings2,
+}
+
+/** What each role's workspace is called. */
+export const WORKSPACE_LABELS: Record<Role, string> = {
+  GATEKEEPER: 'Gatekeeper console',
+  HOST_EMPLOYEE: 'Host workspace',
+  ADMIN: 'Governance hub',
+}

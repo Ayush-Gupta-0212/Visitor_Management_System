@@ -1,6 +1,4 @@
 import { create } from 'zustand'
-import type { Role } from '@/types/vms'
-import { useVmsStore } from './useVmsStore'
 
 /*
  * UI-only state: which visitor's drawer or pass is open and which dialogs are up.
@@ -46,9 +44,3 @@ export const useUiStore = create<UiState>()((set) => ({
   closeInvite: () => set({ inviteOpen: false }),
   closeAll: () => set({ detailVisitorId: null, passVisitorId: null, walkInOpen: false, inviteOpen: false }),
 }))
-
-/** Switches role and closes anything that belonged to the previous perspective. */
-export function switchPerspective(role: Role): void {
-  useUiStore.getState().closeAll()
-  useVmsStore.getState().switchRole(role)
-}

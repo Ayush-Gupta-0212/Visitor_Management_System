@@ -38,12 +38,18 @@ export async function fileToPhotoDataUrl(file: File): Promise<string> {
   }
 }
 
-/** Initials on a slate tile, as an inline SVG: the demo's stand-in for a photo. */
+/**
+ * Initials on a pastel tile whose hue is derived from the name, as an inline SVG:
+ * the demo's stand-in for a photo. Pastel tiles read well in light and dark themes.
+ */
 export function createMonogram(name: string): string {
+  let hash = 0
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+  const hue = hash % 360
   const svg =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">' +
-    '<rect width="96" height="96" fill="#e2e8f0"/>' +
+    `<rect width="96" height="96" fill="hsl(${hue} 55% 86%)"/>` +
     '<text x="48" y="48" dy="0.35em" text-anchor="middle" font-family="system-ui, sans-serif" ' +
-    `font-size="34" font-weight="600" fill="#334155">${initials(name)}</text></svg>`
+    `font-size="34" font-weight="600" fill="hsl(${hue} 45% 26%)">${initials(name)}</text></svg>`
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
 }

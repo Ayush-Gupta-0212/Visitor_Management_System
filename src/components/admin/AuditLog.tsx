@@ -18,7 +18,7 @@ const FILTERS = [
   { value: 'APPROVALS', label: 'Approvals' },
   { value: 'GATE', label: 'Gate' },
   { value: 'ALERTS', label: 'Alerts' },
-  { value: 'POLICY', label: 'Policy' },
+  { value: 'SECURITY', label: 'Security' },
 ] as const
 
 type AuditFilter = (typeof FILTERS)[number]['value']
@@ -31,15 +31,18 @@ const ACTIONS: Record<AuditAction, { label: string; variant: BadgeVariant; categ
   WALK_IN_ADMITTED: { label: 'Walk-in', variant: 'neutral', category: 'GATE' },
   CHECKED_IN: { label: 'Checked in', variant: 'success', category: 'GATE' },
   CHECKED_OUT: { label: 'Checked out', variant: 'neutral', category: 'GATE' },
+  VISIT_EXTENDED: { label: 'Extended', variant: 'warning', category: 'GATE' },
   OVERSTAY_FLAGGED: { label: 'Overstay', variant: 'danger', category: 'ALERTS' },
   EXPIRED: { label: 'Expired', variant: 'neutral', category: 'ALERTS' },
-  POLICY_UPDATED: { label: 'Policy', variant: 'warning', category: 'POLICY' },
-  DATA_RESET: { label: 'Reset', variant: 'neutral', category: 'POLICY' },
+  POLICY_UPDATED: { label: 'Policy', variant: 'warning', category: 'SECURITY' },
+  DATA_RESET: { label: 'Reset', variant: 'neutral', category: 'SECURITY' },
+  SIGNED_IN: { label: 'Signed in', variant: 'neutral', category: 'SECURITY' },
+  SIGNED_OUT: { label: 'Signed out', variant: 'neutral', category: 'SECURITY' },
 }
 
 const PAGE = 25
 
-/** Approval decisions, gate activity, automatic alerts and policy changes, newest first. */
+/** Approval decisions, gate activity, automatic alerts, sign-ins and policy changes, newest first. */
 export function AuditLog({ className }: { className?: string }) {
   const auditLog = useVmsStore((state) => state.auditLog)
   const now = useNow()
@@ -47,7 +50,7 @@ export function AuditLog({ className }: { className?: string }) {
   const [shown, setShown] = useState(PAGE)
 
   const counts = useMemo(() => {
-    const totals: Record<AuditFilter, number> = { ALL: auditLog.length, APPROVALS: 0, GATE: 0, ALERTS: 0, POLICY: 0 }
+    const totals: Record<AuditFilter, number> = { ALL: auditLog.length, APPROVALS: 0, GATE: 0, ALERTS: 0, SECURITY: 0 }
     for (const entry of auditLog) totals[ACTIONS[entry.action].category]++
     return totals
   }, [auditLog])
@@ -70,7 +73,7 @@ export function AuditLog({ className }: { className?: string }) {
         />
       </div>
       {entries.length === 0 ? (
-        <EmptyState icon={History} title="No events here yet" description="Approvals, gate activity and policy changes are recorded as they happen." />
+        <EmptyState icon={History} title="No events here yet" description="Approvals, gate activity, sign-ins and policy changes are recorded as they happen." />
       ) : (
         <ol className="max-h-[34rem] divide-y divide-muted overflow-y-auto">
           {entries.slice(0, shown).map((entry) => (
@@ -121,7 +124,7 @@ function AuditRow({ entry, now }: { entry: AuditEntry; now: Date }) {
         </div>
         <p className="mt-1 text-body-sm text-foreground">{entry.detail}</p>
         <p className="text-body-sm text-muted-foreground">
-          {entry.actorName} · {entry.actorRole === 'SYSTEM' ? 'Automatic' : ROLE_LABELS[entry.actorRole]}
+          {entry.actorName} · {entry.actorRole === 'SYSTEM' ? (entry.actorName === 'System' ? 'Automatic' : 'Public') : ROLE_LABELS[entry.actorRole]}
         </p>
       </div>
     </li>

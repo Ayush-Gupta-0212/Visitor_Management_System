@@ -11,6 +11,7 @@ import { summarizeDay } from '@/lib/visitorRules'
 import { useVmsStore } from '@/store/useVmsStore'
 import { AuditLog } from './AuditLog'
 import { PolicySettingsCard } from './PolicySettingsCard'
+import { TeamAccessPanel } from './TeamAccessPanel'
 
 /** Super-admin governance hub: site analytics, the access policy, the audit trail and every visit. */
 export function AdminDashboard() {
@@ -37,6 +38,7 @@ export function AdminDashboard() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total visitors today"
+          index={0}
           value={day.total}
           unit="visits"
           detail={`${day.checkedOut} completed · ${day.expected} still expected`}
@@ -45,6 +47,7 @@ export function AdminDashboard() {
         />
         <StatCard
           label="Active in premises"
+          index={1}
           value={day.onSite}
           unit="on site"
           detail={`${day.pending} ${day.pending === 1 ? 'request' : 'requests'} waiting on hosts`}
@@ -54,6 +57,7 @@ export function AdminDashboard() {
         />
         <StatCard
           label="Overstay incidents"
+          index={2}
           value={day.overstay}
           unit="open"
           detail={`${flaggedToday} flagged today · ${settings.autoOverstayThresholdMinutes} min grace`}
@@ -63,6 +67,7 @@ export function AdminDashboard() {
         />
         <StatCard
           label="Total pre-approvals"
+          index={3}
           value={activePasses}
           unit="active passes"
           detail={`${day.expected} scheduled for today`}
@@ -78,6 +83,8 @@ export function AdminDashboard() {
         />
         <AuditLog className="lg:col-span-2" />
       </div>
+
+      <TeamAccessPanel />
 
       <VisitorTable title="All visits" />
     </div>

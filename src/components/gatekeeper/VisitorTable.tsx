@@ -11,9 +11,9 @@ import { describeSource } from '@/components/visitor/presentation'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useNow } from '@/hooks/useNow'
 import { formatDay, formatDuration, formatRelative, formatTimeWithDay, minutesBetween, toIsoDate } from '@/lib/format'
-import { visibleTo } from '@/lib/rbac'
 import { cn } from '@/lib/utils'
 import { VISITOR_TYPE_LABELS, countByStatus, filterVisitors, sortForDesk } from '@/lib/visitorRules'
+import { useVisibleVisitors } from '@/store/hooks'
 import { useUiStore } from '@/store/useUiStore'
 import { useVmsStore } from '@/store/useVmsStore'
 import type { VisitorFilters, VisitorRecord } from '@/types/vms'
@@ -43,8 +43,7 @@ interface VisitorTableProps {
  * pauses. Each filter pass is O(N), then O(N log N) to sort; only one page renders.
  */
 export function VisitorTable({ title, emptyAction }: VisitorTableProps) {
-  const visitors = useVmsStore((state) => state.visitors)
-  const currentUser = useVmsStore((state) => state.currentUser)
+  const visitors = useVisibleVisitors()
   const filters = useVmsStore((state) => state.activeFilters)
   const setFilters = useVmsStore((state) => state.setFilters)
   const resetFilters = useVmsStore((state) => state.resetFilters)
@@ -63,7 +62,7 @@ export function VisitorTable({ title, emptyAction }: VisitorTableProps) {
     setFilters({ query: debouncedQuery })
   }, [debouncedQuery, setFilters])
 
-  // Reflect outside changes (clear filters, role switch, database reset) back into the box.
+  // Reflect outside changes (clear filters, sign-in, database reset) back into the box.
   useEffect(() => {
     if (filters.query === lastPushed.current) return
     lastPushed.current = filters.query
@@ -85,8 +84,8 @@ export function VisitorTable({ title, emptyAction }: VisitorTableProps) {
 
   // Everything except the status tab, so each tab can show its own count.
   const scoped = useMemo(
-    () => filterVisitors(visibleTo(currentUser, visitors), { ...filters, status: 'ALL' }, now),
-    [visitors, currentUser, filters, now],
+    () => filterVisitors(visitors, { ...filters, status: 'ALL' }, now),
+    [visitors, filters, now],
   )
   const counts = useMemo(() => countByStatus(scoped), [scoped])
   const activeTab: StatusTab = STATUS_TABS.some((tab) => tab.value === filters.status) ? (filters.status as StatusTab) : 'ALL'

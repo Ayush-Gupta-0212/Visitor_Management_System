@@ -1,7 +1,7 @@
 import { useUiStore } from '@/store/useUiStore'
 import { useVmsStore } from '@/store/useVmsStore'
 import type { CheckInCapture, VisitorRecord, VmsError, VmsErrorCode } from '@/types/vms'
-import { formatDay, formatWindow } from './format'
+import { formatDay, formatDuration, formatTime, formatWindow } from './format'
 import { toast } from './toast'
 
 /*
@@ -10,7 +10,8 @@ import { toast } from './toast'
  */
 
 const ERROR_TITLES: Record<VmsErrorCode, string> = {
-  FORBIDDEN: 'Not allowed for this role',
+  UNAUTHORIZED: 'Please sign in again',
+  FORBIDDEN: 'Not allowed for your role',
   NOT_FOUND: 'Visitor not found',
   VALIDATION: 'Check the highlighted fields',
   INVALID_TRANSITION: "That action isn't available",
@@ -58,6 +59,18 @@ export function checkOutAndNotify(visitor: VisitorRecord): boolean {
   }
   toast.success('Visitor Checked Out Successfully', {
     description: `${visitor.fullName} returned ${visitor.tempCardNumber ?? 'their card'}.`,
+  })
+  return true
+}
+
+export function extendAndNotify(visitor: VisitorRecord, minutes: number): boolean {
+  const result = useVmsStore.getState().extendVisit(visitor.id, minutes)
+  if (!result.ok) {
+    notifyError(result.error)
+    return false
+  }
+  toast.success(`Stay extended by ${formatDuration(minutes)}`, {
+    description: `${visitor.fullName} can now stay until ${formatTime(result.data.timeWindowEnd)}.`,
   })
   return true
 }

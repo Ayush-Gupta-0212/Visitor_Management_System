@@ -14,6 +14,7 @@ import { formatDay, formatWindow, toIsoDate } from '@/lib/format'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { type FieldErrors, VISITOR_TYPE_LABELS, countApprovalsForDay, validateWindow } from '@/lib/visitorRules'
+import { useUser } from '@/store/useAuthStore'
 import { useUiStore } from '@/store/useUiStore'
 import { useVmsStore } from '@/store/useVmsStore'
 import type { IsoDateTime, VisitorRecord, VisitorType } from '@/types/vms'
@@ -53,7 +54,7 @@ export function InviteVisitorModal() {
 }
 
 function InviteForm({ onDone }: { onDone: () => void }) {
-  const user = useVmsStore((state) => state.currentUser)
+  const user = useUser()
   const visitors = useVmsStore((state) => state.visitors)
   const limit = useVmsStore((state) => state.settings.maxPreApprovalsPerEmployeePerDay)
   const openPass = useUiStore((state) => state.openPass)
@@ -62,7 +63,7 @@ function InviteForm({ onDone }: { onDone: () => void }) {
 
   const [title, setTitle] = useState('')
   const [visitorType, setVisitorType] = useState<VisitorType>('BUSINESS_GUEST')
-  const [office, setOffice] = useState<string>(OFFICES[0])
+  const [office, setOffice] = useState<string>(user.office)
   const [date, setDate] = useState(defaults.date)
   const [start, setStart] = useState(defaults.start)
   const [end, setEnd] = useState(defaults.end)

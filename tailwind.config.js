@@ -87,9 +87,9 @@ export default {
 
       // Depth comes from hairlines and tonal planes, not heavy drop shadows.
       boxShadow: {
-        hairline: '0 1px 2px 0 rgb(0 0 0 / 0.05)', // active segmented tab
-        raised: '0 1px 2px 0 rgb(15 23 42 / 0.04)', // hover micro-shadow
-        overlay: '0 12px 32px -4px rgb(15 23 42 / 0.08), 0 0 0 1px rgb(15 23 42 / 0.06)', // modals, sheets, popovers
+        hairline: '0 1px 2px 0 var(--elevation-hairline)', // active segmented tab
+        raised: '0 1px 2px 0 var(--elevation-raised)', // hover micro-shadow
+        overlay: '0 12px 32px -4px var(--elevation-overlay), 0 0 0 1px var(--elevation-ring)', // modals, sheets, popovers
       },
 
       blur: {
@@ -128,6 +128,25 @@ export default {
         // List rows entering after a filter change, and toasts rising into view.
         'row-in': { from: { opacity: '0', transform: 'translateY(4px)' } },
         'rise-in': { from: { opacity: '0', transform: 'translateY(8px) scale(0.98)' } },
+        // Bell nudge when a new request arrives, drifting background glow, QR scanner sweep.
+        wiggle: {
+          '0%, 100%': { transform: 'rotate(0deg)' },
+          '20%': { transform: 'rotate(-14deg)' },
+          '40%': { transform: 'rotate(11deg)' },
+          '60%': { transform: 'rotate(-7deg)' },
+          '80%': { transform: 'rotate(4deg)' },
+        },
+        float: { '0%, 100%': { transform: 'translate3d(0, 0, 0)' }, '50%': { transform: 'translate3d(0, -18px, 0)' } },
+        scan: { from: { top: '10%' }, to: { top: '86%' } },
+        // Stat bars filling in; the success tick drawing itself; a soft glow around live states.
+        'grow-x': { from: { transform: 'scaleX(0)' } },
+        draw: { from: { strokeDashoffset: '1' } },
+        glow: { '0%, 100%': { opacity: '0.35', transform: 'scale(1)' }, '50%': { opacity: '0.7', transform: 'scale(1.08)' } },
+        shake: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '20%, 60%': { transform: 'translateX(-5px)' },
+          '40%, 80%': { transform: 'translateX(5px)' },
+        },
       },
       animation: {
         'fade-in': `fade-in 150ms ${easePrecise}`,
@@ -137,7 +156,14 @@ export default {
         'slide-in': `slide-in 240ms ${easePrecise}`,
         'slide-out': `slide-out 180ms ${easePrecise} forwards`,
         'row-in': `row-in 220ms ${easePrecise} both`,
-        'rise-in': `rise-in 180ms ${easePrecise}`,
+        'rise-in': `rise-in 260ms ${easePrecise} both`,
+        wiggle: 'wiggle 700ms ease-in-out',
+        float: 'float 9s ease-in-out infinite',
+        scan: 'scan 1.6s ease-in-out infinite alternate',
+        'grow-x': `grow-x 900ms ${easePrecise} both`,
+        draw: `draw 600ms ${easePrecise} 150ms both`,
+        glow: 'glow 2.4s ease-in-out infinite',
+        shake: 'shake 400ms ease-in-out',
       },
     },
   },

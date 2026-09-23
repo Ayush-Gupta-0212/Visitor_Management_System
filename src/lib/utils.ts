@@ -25,7 +25,7 @@ const twMerge = extendTailwindMerge({
       ],
       shadow: ['hairline', 'raised', 'overlay'],
       blur: ['overlay'],
-      animate: ['fade-in', 'fade-out', 'pop-in', 'pop-out', 'slide-in', 'slide-out', 'row-in', 'rise-in'],
+      animate: ['fade-in', 'fade-out', 'pop-in', 'pop-out', 'slide-in', 'slide-out', 'row-in', 'rise-in', 'wiggle', 'float', 'scan', 'grow-x', 'draw', 'glow', 'shake'],
       spacing: [
         'space-xxs',
         'space-xs',

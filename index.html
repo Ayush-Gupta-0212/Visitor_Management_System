@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Apply the saved theme before first paint so dark mode never flashes white (see useThemeStore). -->
+    <script>
+      try {
+        var saved = JSON.parse(localStorage.getItem('vms-theme') || 'null')
+        var preference = (saved && saved.state && saved.state.preference) || 'system'
+        var dark = preference === 'dark' || (preference === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+        if (dark) document.documentElement.classList.add('dark')
+      } catch (error) {}
+    </script>
     <!-- Design-system typefaces: Geist (interface) + JetBrains Mono (operational data) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

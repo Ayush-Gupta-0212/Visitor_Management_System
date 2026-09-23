@@ -117,7 +117,7 @@ export function PhotoCapture({ value, onChange, visitorName, error, messageId }:
               {camera === 'unavailable' ? 'Camera unavailable' : 'No photo yet'}
             </p>
             <p className="text-body-sm text-muted-foreground">
-              {camera === 'unavailable' ? 'Upload a photo or use a mock photo.' : 'A photo is mandatory for every walk-in.'}
+              {camera === 'unavailable' ? 'Upload a photo or use a mock photo.' : 'A photo is required for the visitor badge.'}
             </p>
           </div>
         )}

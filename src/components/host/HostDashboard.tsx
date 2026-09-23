@@ -14,7 +14,8 @@ import { approveAndNotify } from '@/lib/feedback'
 import { formatRelative, formatTimeWithDay, formatWindow, toIsoDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { VISITOR_TYPE_LABELS, countApprovalsForDay, isOnSite, sortForDesk } from '@/lib/visitorRules'
-import { usePendingRequests } from '@/store/hooks'
+import { usePendingRequests, useVisibleVisitors } from '@/store/hooks'
+import { useUser } from '@/store/useAuthStore'
 import { useUiStore } from '@/store/useUiStore'
 import { useVmsStore } from '@/store/useVmsStore'
 import type { VisitorRecord } from '@/types/vms'
@@ -28,15 +29,15 @@ const greeting = (now: Date) => {
 
 /** Host workspace: approve live requests, schedule guests, and keep an eye on the day's quota. */
 export function HostDashboard() {
-  const user = useVmsStore((state) => state.currentUser)
+  const user = useUser()
   const visitors = useVmsStore((state) => state.visitors)
+  const mine = useVisibleVisitors()
   const limit = useVmsStore((state) => state.settings.maxPreApprovalsPerEmployeePerDay)
   const openInvite = useUiStore((state) => state.openInvite)
   const pending = usePendingRequests()
   const now = useNow()
   const [rejecting, setRejecting] = useState<VisitorRecord | null>(null)
 
-  const mine = useMemo(() => visitors.filter((visitor) => visitor.hostEmployeeId === user.id), [visitors, user.id])
   const upcoming = useMemo(
     () => mine.filter((visitor) => visitor.status === 'PRE_APPROVED').sort((a, b) => a.timeWindowStart.localeCompare(b.timeWindowStart)),
     [mine],
