@@ -46,16 +46,31 @@ const ananya = employee('emp-ananya', 'Ananya Iyer', 'Talent Acquisition')
 const vikram = employee('emp-vikram', 'Vikram Rathore', 'Facilities Management')
 const meera = employee('emp-meera', 'Meera Krishnan', 'Finance')
 const farhan = employee('emp-farhan', 'Farhan Qureshi', 'Risk & Compliance')
+const suresh = employee('emp-suresh', 'Suresh Pawar', 'Security · Front Desk')
+const kavita = employee('emp-kavita', 'Kavita Joshi', 'Workplace Operations')
 
-/** Everyone a visitor can be hosted by: the list the desk searches when registering a walk-in. */
+/** Everyone a visitor can be hosted by: the list the desk and kiosk search when choosing a host. */
 export const EMPLOYEE_DIRECTORY: readonly Employee[] = [lalita, rohan, ananya, vikram, meera, farhan]
 
-/** One demo user per role for `switchRole`. The host is Lalita Mehta, as in the reference screens. */
-export const DEMO_USERS: Record<Role, UserSession> = {
-  GATEKEEPER: { ...employee('emp-suresh', 'Suresh Pawar', 'Security · Front Desk'), role: 'GATEKEEPER' },
-  HOST_EMPLOYEE: { ...lalita, role: 'HOST_EMPLOYEE' },
-  ADMIN: { ...employee('emp-kavita', 'Kavita Joshi', 'Workplace Operations'), role: 'ADMIN' },
+export interface Account {
+  user: UserSession
+  /** Salted SHA-256 of the password (see lib/auth.ts); the password itself is never stored. */
+  passwordHash: string
 }
+
+const atSite = (person: Employee, role: Role): UserSession => ({ ...person, role, office: OFFICES[0] })
+
+/** Everyone who can sign in: one gatekeeper, every host, and the admin. All work at the Mumbai Goregaon site. */
+export const ACCOUNTS: readonly Account[] = [
+  { user: atSite(suresh, 'GATEKEEPER'), passwordHash: 'ff8f3bc396e96fed01c623af91609ee8538f254f81aae9674b90f048d37d0659' },
+  { user: atSite(lalita, 'HOST_EMPLOYEE'), passwordHash: '8c9e8271ad7db74011f808032dd9f4464a4c3e03520393604c262bc49563fe36' },
+  { user: atSite(rohan, 'HOST_EMPLOYEE'), passwordHash: '7f2a9d6b70dae44e8a6f998676b9835ce04b520a4d00bdfcd2b587dfef73559b' },
+  { user: atSite(ananya, 'HOST_EMPLOYEE'), passwordHash: 'c04bd6291d88b46975fc787dd5e71f4ba840d528c576ab8de25698f6ac77b45e' },
+  { user: atSite(vikram, 'HOST_EMPLOYEE'), passwordHash: '239c5e63b19d435d6f531bec4aea2282feb617cf33ae1f695cb27dff88da3f3b' },
+  { user: atSite(meera, 'HOST_EMPLOYEE'), passwordHash: '933a5fdc110f4e7d6ac4ef260ea0071a8686f7bd8d3e26dadea17a9b5fc8cc7b' },
+  { user: atSite(farhan, 'HOST_EMPLOYEE'), passwordHash: 'a6f31c87df16ae62b8e178badac57aada9a770037ded1e1acc380c3f97725237' },
+  { user: atSite(kavita, 'ADMIN'), passwordHash: 'bcb6d0aecea5f6931f41652d0a06c5c08da098012b8f7e4f40796080a91534ad' },
+]
 
 interface SeedVisit {
   id: string
@@ -252,7 +267,7 @@ type AuditActor = Pick<AuditEntry, 'actorName' | 'actorRole'>
 
 /** The audit trail those visits would have produced, newest first, so the admin view has history from the start. */
 export function createMockAuditLog(visitors: readonly VisitorRecord[], now: Date = new Date()): AuditEntry[] {
-  const desk: AuditActor = { actorName: DEMO_USERS.GATEKEEPER.name, actorRole: 'GATEKEEPER' }
+  const desk: AuditActor = { actorName: suresh.name, actorRole: 'GATEKEEPER' }
   const system: AuditActor = { actorName: 'System', actorRole: 'SYSTEM' }
   const kiosk: AuditActor = { actorName: 'Self-service kiosk', actorRole: 'SYSTEM' }
   const entries: AuditEntry[] = []

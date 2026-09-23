@@ -27,9 +27,11 @@ export interface Employee {
   avatar: string
 }
 
-/** The person using the console. There is no real sign-in; `switchRole` swaps demo users. */
+/** The signed-in person. Their role decides what they can do; their office scopes the front desk's view. */
 export interface UserSession extends Employee {
   role: Role
+  /** Site the person works at. Gatekeepers only see visits booked at their own site. */
+  office: string
 }
 
 export type VisitorStatus =
@@ -122,8 +124,11 @@ export type AuditAction =
   | 'CHECKED_OUT'
   | 'OVERSTAY_FLAGGED'
   | 'EXPIRED'
+  | 'VISIT_EXTENDED'
   | 'POLICY_UPDATED'
   | 'DATA_RESET'
+  | 'SIGNED_IN'
+  | 'SIGNED_OUT'
 
 /** One line of the security audit trail. */
 export interface AuditEntry {
@@ -168,6 +173,9 @@ export interface WalkInInput extends VisitorDetailsInput {
   tempCardNumber?: string
 }
 
+/** A visitor's own request at the self-service kiosk: the walk-in details, minus what only the desk sets. */
+export type KioskRequestInput = Omit<WalkInInput, 'tempCardNumber'>
+
 /** Optional details captured when a pre-approved visitor arrives at the desk. */
 export interface CheckInCapture {
   photoUrl?: string
@@ -177,6 +185,7 @@ export interface CheckInCapture {
 /* Action results */
 
 export type VmsErrorCode =
+  | 'UNAUTHORIZED'
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'VALIDATION'

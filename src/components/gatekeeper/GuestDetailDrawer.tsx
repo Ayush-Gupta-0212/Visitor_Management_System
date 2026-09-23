@@ -1,5 +1,5 @@
 import { addMinutes, parseISO } from 'date-fns'
-import { Ban, Building2, Camera, Check, CircleAlert, LogIn, LogOut, type LucideIcon, Mail, Phone, QrCode } from 'lucide-react'
+import { Ban, Building2, Camera, Check, CircleAlert, Clock3, LogIn, LogOut, type LucideIcon, Mail, Phone, QrCode } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { RejectVisitorModal } from '@/components/host/RejectVisitorModal'
 import { Avatar } from '@/components/ui/Avatar'
@@ -10,12 +10,13 @@ import { describeSource } from '@/components/visitor/presentation'
 import { EMPLOYEE_DIRECTORY } from '@/data/mockData'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { useNow } from '@/hooks/useNow'
-import { approveAndNotify, checkInAndNotify, checkOutAndNotify } from '@/lib/feedback'
+import { approveAndNotify, checkInAndNotify, checkOutAndNotify, extendAndNotify } from '@/lib/feedback'
 import { formatDateTime, formatTime, formatTimeWithDay, formatWindow } from '@/lib/format'
-import { can } from '@/lib/rbac'
+import { authorize } from '@/lib/rbac'
 import { cn } from '@/lib/utils'
 import { VISITOR_TYPE_LABELS, isOnSite } from '@/lib/visitorRules'
 import { useVisitor } from '@/store/hooks'
+import { useUser } from '@/store/useAuthStore'
 import { useUiStore } from '@/store/useUiStore'
 import { useVmsStore } from '@/store/useVmsStore'
 import type { IsoDateTime, VisitorRecord } from '@/types/vms'
@@ -131,16 +132,28 @@ function VisitorProfile({ visitor }: { visitor: VisitorRecord }) {
   )
 }
 
-/** The main action for this visit, given the viewer's role and the visit's status. */
+/**
+ * The main action for this visit, given who is signed in and the visit's status. Offers
+ * only what the store would allow: the same `authorize` check, so a host never sees a
+ * check-in button and the desk never sees visits from another site's actions.
+ */
 function ProfileActions({ visitor }: { visitor: VisitorRecord }) {
-  const user = useVmsStore((state) => state.currentUser)
+  const user = useUser()
   const [rejecting, setRejecting] = useState(false)
-  const isTheirHost = user.role === 'HOST_EMPLOYEE' && visitor.hostEmployeeId === user.id
+  const allowed = (permission: Parameters<typeof authorize>[1]) => authorize(user, permission, visitor) === null
+  const isTheirHost = allowed('visitor:approve')
   const rejectModal = <RejectVisitorModal visitor={rejecting ? visitor : null} onClose={() => setRejecting(false)} />
 
-  if (isOnSite(visitor) && can(user.role, 'visitor:check-out')) return <CheckOutAction visitor={visitor} />
+  if (isOnSite(visitor) && allowed('visitor:check-out')) {
+    return (
+      <>
+        {allowed('visitor:extend') && <ExtendStayAction visitor={visitor} />}
+        <CheckOutAction visitor={visitor} />
+      </>
+    )
+  }
 
-  if (visitor.status === 'PRE_APPROVED' && can(user.role, 'visitor:check-in')) {
+  if (visitor.status === 'PRE_APPROVED' && allowed('visitor:check-in')) {
     return (
       <Button onClick={() => checkInAndNotify(visitor)}>
         <LogIn /> Check in visitor
@@ -182,6 +195,37 @@ function ProfileActions({ visitor }: { visitor: VisitorRecord }) {
     return <StatusNote tone="danger">Entry denied by {visitor.hostEmployeeName}. Do not admit this visitor.</StatusNote>
   }
   return null
+}
+
+const EXTENSIONS = [
+  { minutes: 30, label: '+30 min' },
+  { minutes: 60, label: '+1 hour' },
+  { minutes: 120, label: '+2 hours' },
+]
+
+/** Lengthens an on-site visitor's window; an overstaying visitor goes back to checked in. */
+function ExtendStayAction({ visitor }: { visitor: VisitorRecord }) {
+  const overstaying = visitor.status === 'OVERSTAY'
+
+  return (
+    <div
+      role="group"
+      aria-label="Extend stay"
+      className={cn('flex flex-col gap-2 rounded-md border p-3', overstaying ? 'border-danger-border bg-danger-subtle' : 'border-border bg-surface')}
+    >
+      <p className={cn('inline-flex items-center gap-1.5 text-body-sm', overstaying ? 'text-danger-strong' : 'text-muted-foreground')}>
+        <Clock3 className="size-4 shrink-0" aria-hidden />
+        {overstaying ? 'Overstaying. Extend their stay or check them out.' : `Due out ${formatTime(visitor.timeWindowEnd)}. Need longer?`}
+      </p>
+      <div className="grid grid-cols-3 gap-2">
+        {EXTENSIONS.map(({ minutes, label }) => (
+          <Button key={minutes} variant="outline" size="sm" onClick={() => extendAndNotify(visitor, minutes)}>
+            {label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 /** Two-step check-out: the first click asks the guard to collect the temp card, the second confirms. */

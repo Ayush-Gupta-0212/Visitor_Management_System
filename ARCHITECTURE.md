@@ -19,112 +19,145 @@ The app has four layers. Each layer depends only on the layers below it.
 
 | Layer | Files | Responsibility |
 | --- | --- | --- |
-| **UI** | `src/components/**` | Role screens, overlays and primitives. It never changes data directly; it calls store actions. |
-| **Hooks** | `src/store/hooks.ts`, `src/hooks/*` | Subscribe to the smallest slice of state needed and memoize derived lists. |
-| **Store** | `src/store/useVmsStore.ts` | The single source of truth. Every action runs authorize → validate → check lifecycle → commit → audit. |
-| **Domain** | `src/lib/rbac.ts`, `visitorRules.ts`, `visitorIndex.ts`, `src/types/vms.ts` | Pure TypeScript with no React or Zustand: permissions, lifecycle rules, validation and lookup indexes. |
+| **Pages and UI** | `src/pages/**`, `src/components/**` | Sign-in page, role workspaces, kiosk and pass page; overlays and primitives. UI never changes data directly; it calls store actions. |
+| **Hooks and sync** | `src/store/hooks.ts`, `useLiveSync.ts`, `src/hooks/*` | Subscribe to the smallest slice of state needed, memoize derived lists, and keep every open tab in step. |
+| **Stores** | `src/store/useVmsStore.ts`, `useAuthStore.ts`, `session.ts`, `useThemeStore.ts`, `useUiStore.ts` | The shared visitor data (every action runs authorize → validate → check lifecycle → commit → audit), the tab's session, the theme, and which overlay is open. |
+| **Domain** | `src/lib/rbac.ts`, `visitorRules.ts`, `visitorIndex.ts`, `auth.ts`, `qr.ts`, `passLink.ts`, `src/types/vms.ts` | Pure TypeScript with no React or Zustand: permissions, lifecycle rules, validation, lookup indexes, password hashing, QR and pass links. |
 
 ```mermaid
 flowchart LR
-    subgraph Roles["Role perspectives"]
-        G[Gatekeeper console]
-        H[Host workspace]
-        A[Governance hub]
+    subgraph Pages["Hash routes"]
+        L["#/ sign-in, then the role's workspace"]
+        K["#/kiosk self-service kiosk"]
+        PP["#/pass/… visitor e-pass"]
     end
 
-    subgraph UI["Shared UI"]
-        D[Guest drawer]
-        P[Digital pass]
-        B[Notification bell]
-        T[Toaster]
-    end
-
-    subgraph Store["Zustand"]
-        VMS[(useVmsStore<br/>visitors · settings<br/>auditLog · currentUser)]
+    subgraph Stores["Zustand stores"]
+        AUTH[(useAuthStore<br/>userId, failed attempts)]
+        VMS[(useVmsStore<br/>visitors · settings · auditLog)]
+        THEME[(useThemeStore<br/>light / dark / system)]
         UIS[(useUiStore<br/>open drawer / pass / dialogs)]
     end
 
     subgraph Domain["Pure domain layer"]
         RBAC[rbac.ts<br/>can · authorize · visibleTo]
-        RULES[visitorRules.ts<br/>lifecycle · quota · validation]
+        RULES[visitorRules.ts<br/>lifecycle · quota · kiosk rules]
         IDX[visitorIndex.ts<br/>byId · byPassToken · byHostDay]
+        QR[qr.ts · passLink.ts<br/>uqr encode · jsQR decode]
     end
 
-    LS[(localStorage<br/>vms-store v2)]
+    SS[(sessionStorage<br/>vms-session · per tab)]
+    LS[(localStorage<br/>vms-store v3 · vms-theme · shared)]
+    SYNC[useLiveSync<br/>storage events]
     SWEEP[useStatusSweep<br/>every 30 s]
 
-    G & H & A -->|actions| VMS
-    G & H & A & B -->|open| UIS
-    UIS --> D & P
-    VMS -->|selectors / hooks| G & H & A & D & P & B
+    L & K & PP -->|actions / reads| VMS
+    L -->|signIn / signOut| AUTH
+    VMS -->|getSessionUser| AUTH
     VMS --> RBAC & RULES & IDX
-    VMS <-->|persist: partialize / merge / migrate| LS
+    K & PP & L --> QR
+    AUTH <--> SS
+    VMS <--> LS
+    THEME <--> LS
+    LS -. another tab saved .-> SYNC
+    SYNC -->|rehydrate + role-aware alerts| VMS
     SWEEP -->|evaluateOverstayStatuses<br/>expireLapsedApprovals| VMS
-    G & H & A -. results .-> T
 ```
 
-A single action, for example a host approving a walk-in request, runs like this:
+The split between the two storages is what makes multiple users possible on one machine. **Who you are** lives in `sessionStorage`, which is private to each tab. **What happened** lives in `localStorage`, which every tab shares. So a gatekeeper, a host and the kiosk can run side by side in three tabs and work on the same visits.
+
+A kiosk request travelling to a host and back, across three tabs:
 
 ```mermaid
 sequenceDiagram
-    participant Host as Host UI
-    participant Store as useVmsStore
-    participant Rules as rbac / visitorRules / index
+    participant Kiosk as Kiosk tab (public)
     participant LS as localStorage
-    participant Desk as Gatekeeper UI
+    participant Host as Host tab (Lalita)
+    participant Desk as Desk tab (Suresh)
 
-    Host->>Store: approveVisitor(id)
-    Store->>Rules: authorize(user, 'visitor:approve')
-    Store->>Rules: findVisitor(visitors, id)  (O(1))
-    Store->>Rules: authorize(user, …, visitor)  (host owns it?)
-    Store->>Rules: canTransition(PENDING → PRE_APPROVED)
-    Store->>Rules: hasLapsed? countApprovalsForDay  (O(K))
-    Store->>Store: set({ visitors, auditLog })  (one update)
-    Store-->>LS: persist
-    Store-->>Host: { ok: true, data } → toast "Pass Approved for …"
-    Store-->>Desk: subscribers re-render → bell: "Approved · ready to check in"
+    Kiosk->>Kiosk: submitKioskRequest(details, photo)
+    Kiosk->>LS: persist visitors + audit
+    LS-->>Host: storage event → rehydrate
+    LS-->>Desk: storage event → rehydrate
+    Host->>Host: alert "New visitor request" · bell rings
+    Desk->>Desk: alert "Kiosk request: waiting for Lalita"
+    Host->>Host: approveVisitor(id): authorize (role + owns visit) → lifecycle → quota (O(K))
+    Host->>LS: persist
+    LS-->>Kiosk: rehydrate → waiting screen becomes "You're approved"
+    LS-->>Desk: alert "Lalita approved … Check in"
+    Kiosk->>Kiosk: selfCheckIn(token, photo): site, status, window, photo, free card
+    Kiosk->>LS: persist
+    LS-->>Host: alert "… has arrived"
+    LS-->>Desk: alert "… checked in at the kiosk"
 ```
 
-Store actions **never throw on a business-rule failure**. They return `{ ok: true, data } | { ok: false, error }`, where `error` has a code (`FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `INVALID_TRANSITION`, `QUOTA_EXCEEDED`, `CONFLICT`), a human-readable message and per-field messages. `lib/feedback.ts` turns these results into toasts, so every button reports the same way.
+Store actions **never throw on a business-rule failure**. They return `{ ok: true, data } | { ok: false, error }`. The `error` carries:
+
+- a code: `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION`, `INVALID_TRANSITION`, `QUOTA_EXCEEDED` or `CONFLICT`;
+- a human-readable message;
+- per-field messages, for validation errors.
+
+`lib/feedback.ts` turns these results into toasts, so every button reports the same way.
 
 ---
 
 ## Evaluation criteria fulfilment
 
-The case study lists six evaluation points. This is where each is addressed.
-
 | Criterion | How it is met | Where |
 | --- | --- | --- |
-| **1. Complexity estimation** | Every hot path has a stated bound (see the next section). Lookup indexes make id and pass-token queries O(1) and the quota check O(K) instead of O(N). Complexity notes sit next to the code. | `lib/visitorIndex.ts`, `lib/visitorRules.ts` |
-| **2. User experience** | Three purpose-built role views; a toast for every operation; inline validation that shows every problem at once and focuses the first; a live quota meter; live overstay durations; ⌘K search; confirmation before check-out; empty states with a next step; a drawer that becomes a bottom sheet on tablets; reduced-motion support. | `components/**`, `lib/feedback.ts` |
-| **3. Error handling** | Typed action results instead of exceptions; RBAC and ownership checks on every action; an explicit lifecycle state machine; validation re-run inside the store even when the form already checked; a camera fallback chain; `localStorage` writes that warn instead of crashing when the quota is full; error boundaries per panel with retry and reset. | `store/useVmsStore.ts`, `lib/rbac.ts`, `components/layout/ErrorBoundary.tsx` |
-| **4. Performance** | Debounced search (250 ms); memoized filtering; components subscribe to narrow slices of state; indexes cached per list version; only 10 rows rendered per page; photos compressed to about 20 kB; role screens lazy-loaded as separate chunks. | `components/gatekeeper/VisitorTable.tsx`, `App.tsx` |
-| **5. Scalability** | Domain rules are pure and portable to a server unchanged. Permissions are data (a matrix), so a new role or capability is a one-line change. Persisted state is versioned with a migration hook. Typed action results would map one-to-one onto API responses. See the Q&A for the 50,000-visitor design. | `lib/*`, `types/vms.ts`, persist config |
-| **6. Functionality** | Registration with mandatory photo; two-way host approval; pre-approval with date and window; automatic expiry of unused passes; admin-set quota (default 5 per host per day); check-in and check-out with temp cards; overstay detection; digital pass with a QR placeholder; audit trail; role switching; resettable mock database. | See README feature walkthrough |
+| **1. Complexity estimation** | Every hot path has a stated bound (next section). Lookup indexes make id and pass-token queries O(1) and the quota check O(K) instead of O(N). | `lib/visitorIndex.ts`, `lib/visitorRules.ts` |
+| **2. User experience** | <ul><li>Personal sign-in with one-click demo accounts.</li><li>A purpose-built view per role, plus a touch-first kiosk.</li><li>Live alerts across tabs, a toast for every operation, and inline validation that shows every problem at once.</li><li>QR scanning three ways; light and dark themes with a circular reveal; count-up stats and staggered entrances.</li><li>⌘K search, and reduced-motion support.</li></ul> | `pages/**`, `components/**`, `lib/feedback.ts` |
+| **3. Error handling** | <ul><li>Typed action results instead of exceptions.</li><li>RBAC checks, host ownership and site scope on every action.</li><li>An explicit lifecycle state machine, with validation re-run inside the store.</li><li>Sign-in lockout.</li><li>Camera fallbacks: upload, mock photo, typed pass code.</li><li>Damaged pass links rejected, and `localStorage` writes that warn instead of crashing.</li><li>Error boundaries per panel.</li></ul> | `store/*`, `lib/rbac.ts`, `components/layout/ErrorBoundary.tsx` |
+| **4. Performance** | <ul><li>Debounced search; memoized filtering; narrow store subscriptions.</li><li>Indexes cached per list version; 10 rows per page; photos compressed to about 20 kB.</li><li>Role screens, the kiosk and the pass page load as separate chunks, and the 130 kB QR decoder only when a scanner opens.</li><li>Camera frames downscaled to 720 px before decoding.</li></ul> | `App.tsx`, `lib/qr.ts`, `components/visitor/PassScanner.tsx` |
+| **5. Scalability** | <ul><li>Domain rules are pure and portable to a server unchanged.</li><li>Permissions are data (a matrix plus scopes).</li><li>Persisted state is versioned with migrations.</li><li>Typed results map one-to-one onto API responses.</li><li>The cross-tab event flow has the same shape as a production push channel (see Q&A).</li></ul> | `lib/*`, `types/vms.ts`, persist config |
+| **6. Functionality** | <ul><li>Personal logins with RBAC.</li><li>Registration with a mandatory photo.</li><li>Two-way host approval, live.</li><li>Pre-approval with a date and window, and automatic expiry of unused passes.</li><li>Admin-set quota (default 5 per host per day).</li><li>Check-in and check-out with temp cards, and stay extensions.</li><li>Overstay detection.</li><li>Scannable QR e-passes, shareable by link, email and WhatsApp.</li><li>A self-service kiosk.</li><li>An audit trail including sign-ins.</li><li>Dark mode.</li><li>A resettable mock database.</li></ul> | README feature walkthrough |
+
+Correctness is covered by **31 Vitest tests** (`npm test`):
+
+- the lifecycle, window, quota, card and validation rules;
+- the RBAC matrix and its scopes;
+- the pass-link round trip;
+- a QR encode → rasterize → decode round trip;
+- end-to-end store workflows signed in as the real demo accounts: lockout, cross-role refusals, overstay → extension → check-out, and kiosk request → host approval → self check-in.
 
 ---
 
 ## Algorithm and complexity analysis
 
-`N` = visits in the store, `K` = one host's bookings on one day, `P` = the temp-card pool (899 cards), `A` = audit entries (capped at 300).
+The symbols used below:
+
+- `N` = visits in the store;
+- `K` = one host's bookings on one day;
+- `P` = the temp-card pool (899 cards);
+- `A` = audit entries (capped at 300);
+- `F` = pixels in one downscaled camera frame (at most 720 × 540).
 
 | Operation | Time | Notes |
 | --- | --- | --- |
-| Table search and multi-predicate filter | **O(N)** per run | `filterVisitors` checks status, type, date range and text in one pass. Search input is debounced by 250 ms, so a burst of typing costs one run, not one per keystroke. The result is memoized with `useMemo` and recomputes only when the visitors, user, filters or the 30-second clock change. |
-| Sort for the desk | **O(N log N)** | `sortForDesk` orders by status priority (overstays first), then by window. It runs on the already-filtered list, then one page of 10 rows is rendered. |
-| Status tab counts | **O(N)** | One pass over the filtered list (`countByStatus`). |
-| Visitor by id, pass token → visitor | **O(1)** | `Map` lookups in `visitorIndex.ts`. |
-| Daily quota check | **O(K)** | `countApprovalsForDay` reads only the host/day bucket (`byHostDay`) rather than scanning every visit. |
-| Building the indexes | **O(N)**, once per list version | The store replaces the `visitors` array on every change, so the array itself is the cache key in a `WeakMap`. The first lookup after a change builds `byId`, `byPassToken` and `byHostDay` in a single pass; every later lookup against that version reuses them. |
-| Overstay detection | **O(N)** per sweep | `isOverstaying`: status is `CHECKED_IN` and `now > timeWindowEnd + grace`, compared as parsed ISO instants. Runs on mount, every 30 s and on rehydration. It only writes to the store (and so re-renders) when at least one visitor changes. |
-| Pass expiry | **O(N)** per sweep | `hasLapsed`: status is pending or pre-approved and `now > timeWindowEnd`. |
-| Next free temp card | **O(N + P)** | Collects the cards held on site into a `Set`, then takes the lowest free number from TC-101. |
-| Single-visitor update | **O(N)** | Copying the array immutably (`map`) is what lets React and Zustand detect the change by reference. |
-| Audit append | **O(A)**, A ≤ 300 | New entry prepended and the log trimmed to 300, so the saved log can never grow without limit. |
+| Table search and multi-predicate filter | **O(N)** per run | `filterVisitors` checks status, type, date range and text in one pass. Search input is debounced by 250 ms and the result memoized. |
+| Sort for the desk | **O(N log N)** | Overstays first, then by window; one page of 10 rows is rendered. |
+| RBAC scoping (`visibleTo`) | **O(N)** | Admin: all; gatekeeper: their site; host: their own visitors. Memoized per list version and user. |
+| Visitor by id, pass token → visitor | **O(1)** | `Map` lookups in `visitorIndex.ts`: what a QR scan resolves through. |
+| Daily quota check | **O(K)** | `countApprovalsForDay` reads only the host/day bucket (`byHostDay`). |
+| Building the indexes | **O(N)**, once per list version | The `visitors` array is the `WeakMap` cache key; one pass builds all three maps. |
+| Overstay and expiry sweeps | **O(N)** per sweep | On mount, every 30 s and on rehydration; they write only when something changed. |
+| Next free temp card | **O(N + P)** | Cards held on site go into a `Set`; the lowest free number from TC-101 wins. |
+| Single-visitor update | **O(N)** | Immutable `map`, so React and Zustand detect the change by reference. |
+| Audit append | **O(A)**, A ≤ 300 | Prepend and trim, so the saved log can never grow without limit. |
+| Cross-tab sync | **O(N)** per remote change | Rehydrate from `localStorage`, then diff old and new statuses by id (`Map`) to decide which alerts concern this user. |
+| QR decode | **O(F)** per frame, at 4 frames a second | Frames are downscaled before decoding, and a `busy` flag drops frames rather than queueing them on slow devices. |
+| QR encode | **O(M²)** for an M × M code | A 36-character token is version 3 (29 × 29), memoized per token and drawn as one SVG path with runs merged. |
+| Sign-in | **O(1)** | One SHA-256 digest (Web Crypto) and one account lookup. |
 
-**Space.** O(N) for the visits, plus O(N) for the indexes of the current version (old versions are garbage-collected with their array), plus O(A) with A ≤ 300 for the audit log. Photos are the largest item per visit. Compressing them to a 320 px JPEG of about 20 kB keeps roughly 200 photographed visits inside the ~5 MB `localStorage` budget. If a write still fails, the store logs a warning and keeps working in memory instead of breaking the action.
+**Space.** The store holds:
 
-**The honest trade-off.** Because state is immutable, every mutation costs O(N) (a new array), and the first lookup after a mutation rebuilds the index in O(N). At the scale of one site's day, that is a few thousand records and microseconds. At 50,000 visits per day the right fix is not a cleverer client structure but moving the data to a server, as the Q&A below explains.
+- O(N) for the visits;
+- O(N) for the current version's indexes (old versions are garbage-collected with their array);
+- O(A) with A ≤ 300 for the audit log.
+
+Photos are the largest item. At about 20 kB each, roughly 200 photographed visits fit inside the ~5 MB `localStorage` budget. If a write still fails, the store warns and keeps working in memory.
+
+**The honest trade-off.** Immutability makes each mutation O(N), and every tab re-reads the whole data set when another tab saves. At one site's daily volume that is microseconds. At 50,000 visits a day the answer is a server with paginated reads and pushed deltas, as the Q&A explains, not a cleverer client structure.
 
 ---
 
@@ -132,11 +165,11 @@ The case study lists six evaluation points. This is where each is addressed.
 
 ### Visit lifecycle
 
-The state machine lives in `TRANSITIONS` in `lib/visitorRules.ts`. Every action checks `canTransition` before it commits, so a visit that has been checked out cannot be checked in again, and a pending request cannot be checked in before its host approves it.
+The state machine is `TRANSITIONS` in `lib/visitorRules.ts`. Every action checks `canTransition` before it commits.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING_APPROVAL: desk request / kiosk
+    [*] --> PENDING_APPROVAL: desk request / kiosk request
     [*] --> PRE_APPROVED: host invite
     [*] --> CHECKED_IN: walk-in admitted at desk
 
@@ -144,11 +177,12 @@ stateDiagram-v2
     PENDING_APPROVAL --> REJECTED: host rejects (reason required)
     PENDING_APPROVAL --> EXPIRED: window closes
 
-    PRE_APPROVED --> CHECKED_IN: gatekeeper, from 30 min before window
+    PRE_APPROVED --> CHECKED_IN: desk scan, or kiosk self check-in (from 30 min early, own site, with photo)
     PRE_APPROVED --> REJECTED: host revokes
     PRE_APPROVED --> EXPIRED: window closes unused
 
     CHECKED_IN --> OVERSTAY: window end + grace passes
+    OVERSTAY --> CHECKED_IN: desk extends the stay
     CHECKED_IN --> CHECKED_OUT: gatekeeper
     OVERSTAY --> CHECKED_OUT: gatekeeper
 
@@ -159,28 +193,51 @@ stateDiagram-v2
 
 ### Role-based access control
 
-Permissions are data, in `lib/rbac.ts`:
+Permissions are data, in `lib/rbac.ts`, and `authorize(user, permission, visitor?)` checks four things in order:
+
+1. **Signed in.** Otherwise the action fails with `UNAUTHORIZED`.
+2. **The role holds the permission.** Otherwise `FORBIDDEN`.
+3. **Host ownership.** A host can only decide on their own visitors.
+4. **Site scope.** The desk can only act on visits booked at its own site.
 
 | Permission | Gatekeeper | Host Employee | Super Admin |
 | --- | :---: | :---: | :---: |
 | `visitor:register-walk-in` | ✓ | | |
-| `visitor:check-in` / `visitor:check-out` | ✓ | | |
+| `visitor:check-in` / `check-out` / `extend` | ✓ (own site) | | |
+| `visitor:view-site` | ✓ | | |
 | `visitor:pre-approve` | | ✓ | |
-| `visitor:approve` / `visitor:reject` | | ✓ (own visitors only) | |
-| `visitor:view-all` | ✓ | | ✓ |
+| `visitor:approve` / `reject` | | ✓ (own visitors) | |
+| `visitor:view-all` | | | ✓ |
 | `settings:update` | | | ✓ |
 
-Hosts only ever see their own visitors (`visibleTo`), and approve and reject also check ownership. The UI asks `can()` to decide which buttons to show; the store enforces the same rules again, so hiding a button is never the only line of defence.
+The UI asks the same `authorize()` which buttons to show. The store enforces it again on every action, so hiding a button is never the only line of defence.
 
-### Persistence
+The kiosk's two actions are deliberately public. They are narrow and carry their own rules (`selfCheckInProblem`):
 
-`persist` saves `{ role, visitors, settings, auditLog }` under the key `vms-store` at version 2:
+- a visitor can only request a visit for themselves;
+- they can only check in with an approved pass, for this site, inside its window, with a photo.
 
-- **Filters are not saved.** They are per-session UI state.
-- **Only the role is saved, not the whole session.** `merge` rebuilds the session from the role, so demo users stay in sync with the code, and an unknown saved role falls back safely.
-- **Older data is discarded.** `migrate` replaces any version-1 data with fresh demo data rather than loading records that lack `office`, `approvedAt` or the audit log.
+### Authentication and sessions
+
+- **Accounts and hashing.** `ACCOUNTS` pairs each user with a SHA-256 hash of `email:password`, computed with Web Crypto (`lib/auth.ts`). The email acts as a salt, so identical passwords hash differently. Plain passwords exist only in `demoCredentials.ts`, which the sign-in page shows as a reviewer convenience.
+- **Checking a sign-in.** `signIn` (`store/session.ts`) normalizes the email and hashes the attempt. An unknown email and a wrong password get the same message, so the form doesn't reveal which accounts exist. Five failures lock sign-in for 30 seconds.
+- **Starting the session.** A successful sign-in stores only the user's id in `sessionStorage`. The user record itself is looked up from the code, so a tampered session can at most name another account's id. The next section explains why that is acceptable only in a demo.
+- **Audit and the gate.** Sign-in and sign-out are audited. `App.tsx` renders the sign-in page until a session exists, then mounts the role's workspace keyed by user.
+
+### Persistence and live sync
+
+Three storage keys:
+
+| Key | Storage | Holds | Why there |
+| --- | --- | --- | --- |
+| `vms-store` (version 3) | `localStorage` | visitors, settings, audit log | Shared by every tab: the "database". |
+| `vms-session` | `sessionStorage` | the signed-in user's id | Private to one tab, so different people can work side by side. |
+| `vms-theme` | `localStorage` | light / dark / system | A device preference; applied before first paint by an inline script in `index.html`. |
+
+- **Filters are not saved.** They are per-tab UI state.
+- **Old saves are migrated.** `migrate` discards version-1 data. `merge` takes only the fields it knows, so the version-2 demo role is ignored.
 - **Stale statuses are fixed on load.** `onRehydrateStorage` runs both sweeps, so anything that lapsed while the app was closed is corrected.
-- **Failed writes don't break actions.** A safe storage wrapper catches write errors, such as a full quota.
+- **Other tabs' writes are picked up.** `useLiveSync` listens for `storage` events on `vms-store`. Browsers fire these only in *other* tabs, so a tab is never alerted about its own actions. On an event it rehydrates, then diffs the statuses and raises only the alerts that concern its signed-in user. The kiosk rehydrates but raises no staff alerts.
 
 ---
 
@@ -188,16 +245,19 @@ Hosts only ever see their own visitors (`visibleTo`), and approve and reject als
 
 | Decision | Why |
 | --- | --- |
-| **ISO instants for the visit window, plus an `expectedDate` day key** | The reference screens show a walk-in window running *Sun 4:21 PM → Mon 12:21 AM*. Instants handle windows that cross midnight; the local day key drives quota counting and date filtering. |
-| **An `EXPIRED` status beyond the original six** | The brief requires pre-approvals to "expire automatically" when unused. A real status keeps every list, filter and badge honest without extra derived logic. |
-| **Two walk-in paths** | *Check in now* admits the visitor immediately, as originally specified. *Send for host approval* is the brief's approval workflow. The guard chooses per visitor. |
-| **`approvedAt` and `source` on each visit** | The quota counts approvals the host issued. Walk-ins the desk admitted directly carry no `approvedAt`, so they never use up a host's quota. |
-| **Pure domain layer, thin store** | Rules can be unit-tested and moved to a server unchanged. The store only orchestrates. |
-| **A separate UI store** | Any component (a table row, the bell, a toast action) can open the shared drawer or pass without prop drilling, and UI state is never persisted. |
-| **A single SVG for the pass** | What is shown, printed and downloaded are guaranteed identical. The downloaded file uses hex colours because it can't read the app's CSS variables. |
-| **Stitch design tokens from the written spec** | Stitch's auto-generated palette (pure-black primary, bluish surfaces) contradicted its own DESIGN.md and colour overrides. The explicit spec values won: slate-900 primary, slate-50 canvas, zinc-200 hairlines. |
-| **Tailwind v4 with `tailwind.config.js` via `@config`** | The scales live in the JS config as originally requested. The two default-transition variables live in `@theme` instead, because v4 inlines JS-config values and those two are read as live CSS variables. Setting them in the JS config silently disabled every transition. |
-| **Role screens lazy-loaded** | The main chunk is about 452 kB (145 kB gzipped); the gatekeeper, host and admin screens load on demand (about 18, 22 and 8 kB). |
+| **Session per tab, data shared** | It is the smallest design that makes multi-user workflows real without a server: three roles in three tabs, updating each other live. |
+| **`storage` events for sync** | Built into every browser, needs no server, and fires only in other tabs, so there's no echo or feedback loop. `BroadcastChannel` would also work; `storage` comes free with the persistence already in place. |
+| **The QR code encodes only the token** | A 36-character UUID gives a small version-3 code that scans easily from a phone screen, and a photographed pass leaks nothing. The desk resolves the token against its own records. |
+| **Pass links carry the details** | With no server, a link must be self-contained to open on the visitor's phone. The details are display-only; check-in trusts only the token lookup. |
+| **Hash routing** | `#/kiosk` and `#/pass/…` work on any static host with no rewrite rules. |
+| **The kiosk as a separate, public route** | Visitors never see staff screens, and the kiosk's two actions are the only unauthenticated ones, each with its own narrow rules. |
+| **ISO instants for windows, plus an `expectedDate` day key** | Windows can cross midnight; the day key drives quota counting and date filtering. |
+| **An `EXPIRED` status, and `OVERSTAY → CHECKED_IN`** | Unused passes must "expire automatically"; an extension clears an overstay without inventing a separate status. |
+| **Pure domain layer, thin stores** | Rules are unit-tested directly and would move to a server unchanged. |
+| **A full dark palette in CSS variables** | Components have almost no `dark:` variants. The `.dark` class redefines every token, and status colours become translucent tints that sit well on dark surfaces. |
+| **Theme switch through the View Transitions API** | One `startViewTransition` plus a `clip-path` circle gives the reveal. Browsers without it, and users who prefer reduced motion, get an instant switch. |
+| **Code splitting** | The main chunk is about 380 kB (122 kB gzipped). The role workspaces (11–22 kB), the kiosk (18 kB), the pass page (4 kB) and jsQR (130 kB) load on demand. |
+| **Stitch design tokens from the written spec** | Stitch's auto-generated palette contradicted its own DESIGN.md; the explicit spec values won. |
 
 ---
 
@@ -205,53 +265,76 @@ Hosts only ever see their own visitors (`visibleTo`), and approve and reject als
 
 ### 1. How would you scale this to 50,000 visitors per day?
 
-The client already keeps its hot paths off full scans, but at that volume the data belongs on a server, and the client should only hold what it displays.
+The client already keeps its hot paths off full scans, but at that volume the data belongs on a server, and the client should hold only what it displays.
 
-- **Storage.** PostgreSQL with a `visits` table partitioned by `expected_date`. Indexes on `(site_id, expected_date, status)` for the desk view, `(host_id, expected_date)` for quota checks (the same shape as `byHostDay` today), and a unique index on `pass_token`.
-- **Reads.** Paginated APIs (`GET /sites/:id/visits?date=&status=&q=&cursor=`) using keyset pagination; full-text search through a trigram or GIN index, or OpenSearch for fuzzy matching. The table renders one page at a time already, so the UI barely changes. For very large pages, add row virtualization.
-- **Writes.** The quota check must be atomic. Two hosts' approvals racing each other should not both pass. Use `SELECT … FOR UPDATE` on a per-host-per-day counter row, or a conditional `UPDATE … WHERE approvals < limit`.
-- **Sweeps.** Move overstay and expiry detection to a scheduled worker, or better, schedule a delayed job at each visit's `window_end + grace`. That is O(1) per visit instead of re-scanning.
-- **Throughput.** 50,000 visits a day is about 0.6 writes per second on average, with lobby peaks perhaps 20 times higher. One Postgres primary handles that easily; the real work is keeping the read path cached and paginated.
+- **Storage.** PostgreSQL with `visits` partitioned by `expected_date`. Add indexes on `(site_id, expected_date, status)` for the desk view, `(host_id, expected_date)` for quota checks (the same shape as `byHostDay`), and a unique index on `pass_token`.
+- **Reads.** Paginated APIs with keyset pagination, and full-text search through a trigram index or OpenSearch. The table already renders one page at a time.
+- **Writes.** The quota check must be atomic, so two approvals racing each other can't both pass. Use `SELECT … FOR UPDATE` on a per-host-per-day counter, or a conditional `UPDATE … WHERE approvals < limit`.
+- **Sweeps.** Schedule a delayed job at each visit's `window_end + grace` instead of re-scanning: O(1) per visit.
+- **Throughput.** 50,000 visits a day is about 0.6 writes per second on average, with lobby peaks perhaps 20 times higher. One Postgres primary handles that; the real work is caching and paginating the read path.
 
-### 2. How would real-time approvals work in production, using WebSockets or SSE?
+### 2. How would real-time sync work in production, beyond tabs of one browser?
 
-Today the host's bell and the desk's *ready to check in* list update because both roles share one in-memory store. In production:
+The event flow already exists. Today the transport is `localStorage` plus `storage` events. In production:
 
-1. The desk submits a request with `POST /visits`, which writes the row and an outbox event (`visit.requested`) in the same transaction.
-2. A dispatcher publishes the event to a Redis Streams or Kafka topic.
-3. A gateway pushes it to the host's open sessions over **Server-Sent Events** (one-way, works through proxies, reconnects automatically with `Last-Event-ID`) or WebSockets if two-way messaging is needed. Offline hosts get web push, email, SMS or an IVR call, as the brief lists.
-4. The host approves with `POST /visits/:id/approve`. The server re-runs the same guards the store runs today (role, ownership, lifecycle, quota) and emits `visit.approved`, which reaches the desk's stream.
-5. The client applies events to the store as patches. Actions are idempotent and events carry a version, so a replayed event after a reconnect is harmless.
+1. **Write with an event.** An action becomes an API call (`POST /visits/:id/approve`). The server re-runs the same guards the store runs today (authentication, role, ownership or site scope, lifecycle, quota), then writes the row and an outbox event (`visit.approved`) in one transaction.
+2. **Publish.** A dispatcher publishes the event to Redis Streams or Kafka.
+3. **Push.** A gateway pushes it over **Server-Sent Events** (one-way, proxy-friendly, resumes with `Last-Event-ID`) or WebSockets to the sessions allowed to see it: the host, the site's desk and the kiosk. Offline hosts get push, email or SMS.
+4. **Apply.** The client applies events as patches. Events carry a version and actions are idempotent, so a replay after a reconnect is harmless. `useLiveSync` already turns remote changes into role-aware alerts; only its input changes.
 
-Because store actions already return typed results, only their implementation changes: instead of mutating local state, they call the API and reconcile.
+This also removes the demo's last-write-wins race between two tabs, because the server serializes writes.
 
-### 3. How are camera privacy and image compression handled?
+### 3. Is checking passwords in the browser secure?
 
-- **Consent and minimal capture.** The camera starts only when the guard clicks **Start camera**. The stream is stopped the moment a frame is captured, the capture is cancelled or the dialog closes, so the camera light never stays on. Audio is never requested.
-- **Graceful denial.** A denied permission or a missing camera shows a toast and falls back to upload or a mock photo; registration is never blocked.
-- **Compression.** Frames and uploads are centre-cropped and re-encoded client-side as a 320 px JPEG at 82% quality (about 15–25 kB, down from megabytes). Only the compressed image is kept.
-- **Storage.** In this demo, photos stay in the browser. In production they would upload directly to object storage through a short-lived pre-signed URL, be encrypted at rest, be referenced by key rather than embedded, and be deleted automatically after a retention period (for example 24 hours after check-out) to meet data-protection rules such as India's DPDP Act. Access to them would be written to the audit log.
+No, and the app says so.
+
+- **What the demo does.** It stores only salted hashes, gives identical errors for unknown accounts and wrong passwords, rate-limits with a lockout, and audits every session. But the hashes ship to the browser, and anyone with dev tools can change `sessionStorage`.
+- **What production would do.** Sign in through the company's identity provider (OIDC/SAML SSO), with MFA for admins. Then:
+  - keep sessions in `HttpOnly`, `Secure`, `SameSite` cookies;
+  - store credentials server-side as Argon2 or bcrypt hashes;
+  - have the server enforce every permission, as the store does now.
+
+The RBAC module is written to move there unchanged.
 
 ### 4. How do you stop a visitor reusing a screenshot of their QR pass?
 
-Today the token is an opaque random UUID, and the store already refuses check-in outside the approved window (it allows at most 30 minutes early). In production:
+- **Today.** The token is an opaque random UUID. Check-in requires the pass to be approved, for this site and inside its window (at most 30 minutes early), and the lifecycle forbids a second check-in. The kiosk also takes a live photo, which the desk can compare against the visitor.
+- **Production additions.**
+  - A **signed, expiring token** (HMAC or JWT over the visit id, window and a nonce), so it cannot be forged.
+  - For high-security sites, a **rotating code** (TOTP-style, refreshed every 30 s in a wallet pass), which defeats screenshots entirely.
 
-- The QR code would encode a **signed, expiring token** (HMAC or JWT over the visit id, window and a nonce), so it cannot be forged or edited.
-- Tokens are **single-use for check-in**: the lifecycle forbids a second check-in on the same visit.
-- For high-security sites, a **rotating code** (TOTP-style, refreshed every 30 seconds in the wallet pass) defeats screenshots entirely.
-- The guard still matches the **photo** on the pass against the person at the desk, which is why photo capture is mandatory.
+### 5. How are camera privacy and image compression handled?
 
-### 5. How would you test this?
+- **Consent and minimal capture.** The camera starts only when someone chooses it (or opens a scanner). It stops the moment a frame is captured or decoded, or the dialog closes, and audio is never requested.
+- **Graceful denial.** Registration and scanning always have a non-camera path: upload, a mock photo, or a typed pass code.
+- **Compression.** Photos are centre-cropped and re-encoded client-side as a 320 px JPEG at 82% (about 15–25 kB). Scanner frames are decoded in memory and never stored.
+- **Production storage.** Direct upload to object storage through pre-signed URLs, encrypted at rest, with automatic deletion after a retention period (for example 24 hours after check-out) to meet rules such as India's DPDP Act. Every access would be audited.
 
-- **Unit tests (Vitest)** for the pure layer, which is already written for it: lifecycle transitions, quota counting including revoked and walk-in cases, time windows across midnight and the early check-in edge, temp-card allocation, validation, filtering, and the RBAC matrix.
-- **Store tests:** call actions against a fresh store with an injected clock (sweeps already accept `now`) and assert on the typed results and audit entries.
-- **Component tests (Testing Library)** for flows such as walk-in validation, focus on the first invalid field, and the quota warning disabling **Confirm**.
-- **End-to-end tests (Playwright)** for the two-way approval across role switches, with `getUserMedia` stubbed to cover the camera-denied path.
+### 6. How is it tested?
 
-### 6. Why Zustand rather than Redux Toolkit or React Context?
+`npm test` runs 31 Vitest tests in Node, with no browser needed. The domain layer is pure, and the store skips persistence outside a browser.
 
-The store is small, needs selector-level subscriptions for performance (the table must not re-render when the audit log changes), and needs persistence with versioned migrations. Zustand provides all three in about 1 kB with no provider tree. Context would re-render every consumer on each change. Redux Toolkit would work, but adds ceremony without a benefit at this size. The domain logic doesn't depend on Zustand, so switching later would only touch the store file.
+- **Rules:** lifecycle transitions, overstay and expiry edges, the 30-minute early check-in, quota counting (including revoked and walk-in cases), card allocation, validation, and phone search.
+- **RBAC:** role permissions, and the unauthorized, forbidden, host-ownership and site-scope refusals.
+- **Passes:** pass-link round trips (with non-ASCII names), damaged links, and token extraction from scans, codes and links. QR codes go encode → rasterize → jsQR decode.
+- **Workflows:** against the real store, signed in with the real demo passwords:
+  - every account signs in, and sign-in locks after five failures;
+  - each role is refused the others' actions;
+  - pre-approval → check-in → overstay → extension → check-out;
+  - the admin-set quota;
+  - kiosk request → host approval → self check-in;
+  - revoked and unknown passes are refused.
 
-### 7. Why does the quota count visit days rather than days the approvals were created?
+Next would come component tests (Testing Library) for form flows, and Playwright for the three-tab walkthrough with `getUserMedia` stubbed.
 
-"Max 5 visitors per employee per day" is a security control on how many guests a host brings into the building on a given day. If it counted approvals by creation date, a host could approve 5 today for Friday, 5 tomorrow for Friday, and so on, and flood Friday. Keying on the visit day (`expectedDate`) closes that hole. Revoking a pass frees its slot, and walk-ins the desk admits directly are excluded, since the host never approved them.
+### 7. Why Zustand rather than Redux Toolkit or React Context?
+
+- **Selector subscriptions.** The table must not re-render when the audit log changes.
+- **Persistence.** `persist` gives versioned migrations and a pluggable storage engine: `sessionStorage` for the session, `localStorage` for data.
+- **Outside React.** `getState()` works outside components, which is what `session.ts`, the sweeps and the sync listener need.
+
+Zustand does all of that in about 1 kB with no provider tree. Context would re-render every consumer on each change. Redux Toolkit would work, but adds ceremony without a benefit at this size.
+
+### 8. Why does the quota count visit days rather than days the approvals were created?
+
+The quota is a security control on how many guests a host brings in on a given day. Counting by creation date would let a host approve 5 today for Friday, 5 more tomorrow for Friday, and so on. Keying on the visit day (`expectedDate`) closes that hole. Revoking a pass frees its slot, and walk-ins admitted directly by the desk are excluded, since the host never approved them.

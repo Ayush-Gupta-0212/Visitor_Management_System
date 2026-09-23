@@ -1,22 +1,27 @@
-import { addMinutes, parseISO } from 'date-fns'
+import { addMinutes, isAfter, parseISO } from 'date-fns'
 import { create } from 'zustand'
-import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
-import { DEMO_USERS, EMPLOYEE_DIRECTORY, OFFICES, createMockAuditLog, createMockVisitors } from '@/data/mockData'
+import { createJSONStorage, persist } from 'zustand/middleware'
+import { EMPLOYEE_DIRECTORY, OFFICES, createMockAuditLog, createMockVisitors } from '@/data/mockData'
 import { formatDay, formatDuration, formatTime, formatWindow, minutesBetween, toIsoDate } from '@/lib/format'
 import { authorize, type Permission } from '@/lib/rbac'
+import { failure } from '@/lib/result'
 import { createId } from '@/lib/utils'
-import { findVisitor } from '@/lib/visitorIndex'
+import { findVisitor, findVisitorByPassToken } from '@/lib/visitorIndex'
 import {
   DEFAULT_WALK_IN_MINUTES,
+  PASS_NOT_FOUND,
   STATUS_LABELS,
   canTransition,
   cardError,
   checkInWindowError,
   countApprovalsForDay,
   hasLapsed,
+  isOnSite,
   isOverstaying,
+  isPhoto,
   nextFreeCard,
   normalizeDetails,
+  selfCheckInProblem,
   validateSettings,
   validateVisitorDetails,
   validateWalkIn,
@@ -30,32 +35,40 @@ import type {
   CheckInCapture,
   Employee,
   IsoDate,
+  KioskRequestInput,
   PreApprovalInput,
-  Role,
   SystemSettings,
   UserSession,
   VisitorFilters,
   VisitorRecord,
   VisitorStatus,
   VmsError,
-  VmsErrorCode,
   WalkInInput,
 } from '@/types/vms'
+import { getSessionUser } from './useAuthStore'
+import { browserStorage } from './storage'
 
 /*
  * The Visitor Management store (Zustand + persist).
  *
- * Every mutating action authorizes the current user (lib/rbac), validates its input
- * and the visit's lifecycle (lib/visitorRules), commits, and appends to the audit
- * trail in the same update. Failures come back as `{ ok: false, error }` rather than
- * exceptions, so the UI can show the message. Visitors are a flat array; id lookups
- * go through the O(1) index in lib/visitorIndex.
+ * Every staff action checks the signed-in user's permissions (lib/rbac), validates
+ * its input and the visit's lifecycle (lib/visitorRules), commits, and appends to
+ * the audit trail in the same update. The kiosk actions are the only public ones.
+ * Failures come back as `{ ok: false, error }` rather than exceptions, so the UI
+ * can show the message. Visitors are a flat array; id and pass-token lookups go
+ * through the O(1) indexes in lib/visitorIndex.
  */
 
 export const DEFAULT_SETTINGS: SystemSettings = {
   maxPreApprovalsPerEmployeePerDay: 5,
   autoOverstayThresholdMinutes: 30,
 }
+
+/** localStorage key for the shared visitor data; other tabs listen for changes to it. */
+export const VMS_STORAGE_KEY = 'vms-store'
+
+/** The site the lobby kiosk stands in. */
+export const KIOSK_SITE: string = OFFICES[0]
 
 /** Filters a fresh view starts with: everything for today. */
 export function createDefaultFilters(now: Date = new Date()): VisitorFilters {
@@ -64,7 +77,6 @@ export function createDefaultFilters(now: Date = new Date()): VisitorFilters {
 }
 
 interface VmsState {
-  currentUser: UserSession
   visitors: VisitorRecord[]
   settings: SystemSettings
   activeFilters: VisitorFilters
@@ -73,8 +85,6 @@ interface VmsState {
 }
 
 interface VmsActions {
-  /** Switches the viewing perspective to the demo user for `role`, with fresh filters. */
-  switchRole: (role: Role) => void
   setFilters: (patch: Partial<VisitorFilters>) => void
   resetFilters: () => void
 
@@ -91,6 +101,13 @@ interface VmsActions {
   /** Gatekeeper admits a pre-approved visitor inside their window and issues a temp card. */
   checkInVisitor: (visitorId: string, capture?: CheckInCapture) => ActionResult<VisitorRecord>
   checkOutVisitor: (visitorId: string) => ActionResult<VisitorRecord>
+  /** Gatekeeper lengthens an on-site visitor's window, clearing an overstay. */
+  extendVisit: (visitorId: string, minutes: number) => ActionResult<VisitorRecord>
+
+  /** Public: a visitor asks for a visit at the lobby kiosk; the host must approve it. */
+  submitKioskRequest: (input: KioskRequestInput) => ActionResult<VisitorRecord>
+  /** Public: a pre-approved visitor scans their e-pass at the kiosk and checks themselves in. */
+  selfCheckIn: (passToken: string, photoUrl: string) => ActionResult<VisitorRecord>
 
   /** Flags on-site visitors past window end + grace period as OVERSTAY; returns the ids flagged. */
   evaluateOverstayStatuses: (now?: Date) => string[]
@@ -98,19 +115,22 @@ interface VmsActions {
   expireLapsedApprovals: (now?: Date) => string[]
 
   updateSettings: (patch: Partial<SystemSettings>) => ActionResult<SystemSettings>
-  /** Restores the seeded visits, default policy and audit trail (demo utility, not role-gated). */
+  /** Adds a sign-in or sign-out to the audit trail (called by session.ts). */
+  recordSecurityEvent: (action: 'SIGNED_IN' | 'SIGNED_OUT', user: UserSession, detail: string) => void
+  /** Restores the seeded visits, default policy and audit trail (demo utility). */
   resetDemoData: () => void
 }
 
 export type VmsStore = VmsState & VmsActions
 
-/** The slice saved to localStorage. Filters are per-session UI state, so they're left out. */
-type PersistedVms = Pick<VmsState, 'visitors' | 'settings' | 'auditLog'> & { role: Role }
+/** The slice saved to localStorage and shared by every tab. Filters are per-tab UI state. */
+type PersistedVms = Pick<VmsState, 'visitors' | 'settings' | 'auditLog'>
 
 const MAX_AUDIT_ENTRIES = 300
 
 type Actor = Pick<AuditEntry, 'actorName' | 'actorRole'>
 const SYSTEM: Actor = { actorName: 'System', actorRole: 'SYSTEM' }
+const KIOSK: Actor = { actorName: 'Self-service kiosk', actorRole: 'SYSTEM' }
 const actorOf = (user: UserSession): Actor => ({ actorName: user.name, actorRole: user.role })
 
 function auditEntry(action: AuditAction, actor: Actor, visitor: VisitorRecord | null, detail: string, at = new Date()): AuditEntry {
@@ -134,73 +154,63 @@ function seedData(now = new Date()): Pick<VmsState, 'visitors' | 'auditLog'> {
   return { visitors, auditLog: createMockAuditLog(visitors, now) }
 }
 
-function failure(code: VmsErrorCode, message: string, fields?: FieldErrors): { ok: false; error: VmsError } {
-  return { ok: false, error: fields ? { code, message, fields } : { code, message } }
-}
-
 const invalid = (fields: FieldErrors) => failure('VALIDATION', 'Some details need attention.', fields)
 const hasErrors = (fields: FieldErrors) => Object.keys(fields).length > 0
 const noFreeCard = () => failure('CONFLICT', 'Every temporary card is in use. Collect cards from departing visitors first.')
 
-/** localStorage, except a failed write (e.g. quota filled by captured photos) warns instead of breaking the action. */
-const safeLocalStorage: StateStorage = {
-  getItem: (name) => localStorage.getItem(name),
-  setItem: (name, value) => {
-    try {
-      localStorage.setItem(name, value)
-    } catch (error) {
-      console.warn('[vms] Could not save visitor data; changes will last until the page reloads.', error)
-    }
-  },
-  removeItem: (name) => localStorage.removeItem(name),
+/** The signed-in user if they hold `permission`, otherwise why they can't act. */
+function signedInWith(permission: Permission): { ok: true; user: UserSession } | { ok: false; error: VmsError } {
+  const user = getSessionUser()
+  const denied = authorize(user, permission)
+  if (denied || !user) return { ok: false, error: denied ?? { code: 'UNAUTHORIZED', message: 'Sign in to continue.' } }
+  return { ok: true, user }
 }
 
 export const useVmsStore = create<VmsStore>()(
   persist(
     (set, get) => {
       /** Adds a new record and its audit entry in one update. */
-      const insert = (record: VisitorRecord, action: AuditAction, detail: string): ActionResult<VisitorRecord> => {
+      const insert = (record: VisitorRecord, action: AuditAction, detail: string, actor: Actor): ActionResult<VisitorRecord> => {
         set((state) => ({
           visitors: [record, ...state.visitors],
-          auditLog: withAudit(state.auditLog, [auditEntry(action, actorOf(state.currentUser), record, detail)]),
+          auditLog: withAudit(state.auditLog, [auditEntry(action, actor, record, detail)]),
         }))
         return { ok: true, data: record }
       }
 
       /** Replaces a record in place and appends its audit entry in one update. */
-      const commit = (updated: VisitorRecord, action: AuditAction, detail: string): ActionResult<VisitorRecord> => {
+      const commit = (updated: VisitorRecord, action: AuditAction, detail: string, actor: Actor): ActionResult<VisitorRecord> => {
         set((state) => ({
           visitors: state.visitors.map((v) => (v.id === updated.id ? updated : v)),
-          auditLog: withAudit(state.auditLog, [auditEntry(action, actorOf(state.currentUser), updated, detail)]),
+          auditLog: withAudit(state.auditLog, [auditEntry(action, actor, updated, detail)]),
         }))
         return { ok: true, data: updated }
       }
 
       /**
-       * The checks every single-visitor action shares, in order: the role may do this
-       * at all, the visitor exists, a host-scoped action targets the user's own visitor,
-       * and the lifecycle allows moving to `next`. Returns the visitor when all pass.
+       * The checks every single-visitor staff action shares, in order: signed in with the
+       * permission, the visitor exists, host ownership / site scope, and the lifecycle
+       * allows moving to `next`. Returns the visitor and the acting user.
        */
       const authorizeTransition = (
         permission: Permission,
         visitorId: string,
         next: VisitorStatus,
         verb: string,
-      ): ActionResult<VisitorRecord> => {
-        const { currentUser, visitors } = get()
-        const roleDenied = authorize(currentUser, permission)
-        if (roleDenied) return { ok: false, error: roleDenied }
+      ): ActionResult<{ visitor: VisitorRecord; user: UserSession }> => {
+        const who = signedInWith(permission)
+        if (!who.ok) return who
 
-        const visitor = findVisitor(visitors, visitorId)
+        const visitor = findVisitor(get().visitors, visitorId)
         if (!visitor) return failure('NOT_FOUND', 'That visitor record no longer exists.')
 
-        const notTheirHost = authorize(currentUser, permission, visitor)
-        if (notTheirHost) return { ok: false, error: notTheirHost }
+        const scoped = authorize(who.user, permission, visitor)
+        if (scoped) return { ok: false, error: scoped }
 
         if (!canTransition(visitor.status, next)) {
           return failure('INVALID_TRANSITION', `Can't ${verb} ${visitor.fullName} (currently ${STATUS_LABELS[visitor.status]}).`)
         }
-        return { ok: true, data: visitor }
+        return { ok: true, data: { visitor, user: who.user } }
       }
 
       /** QUOTA_EXCEEDED when `hostId` already has the maximum approved visits for `day`. */
@@ -212,27 +222,23 @@ export const useVmsStore = create<VmsStore>()(
         return failure('QUOTA_EXCEEDED', `Daily limit reached: ${approved} of ${limit} visits are already approved for ${formatDay(day)}.`)
       }
 
-      /** Validation and host lookup shared by both front-desk registration paths. */
-      const prepareDeskVisit = (input: WalkInInput): { ok: true; host: Employee } | { ok: false; error: VmsError } => {
-        const { currentUser, visitors } = get()
-        const denied = authorize(currentUser, 'visitor:register-walk-in')
-        if (denied) return { ok: false, error: denied }
-
+      /** Checks shared by every registration made in the lobby (desk or kiosk): details, photo and host. */
+      const validateLobbyVisit = (input: KioskRequestInput): { ok: true; host: Employee } | { ok: false; error: VmsError } => {
         const host = EMPLOYEE_DIRECTORY.find((employee) => employee.id === input.hostEmployeeId)
-        const fields = { ...validateVisitorDetails(input), ...validateWalkIn(input, visitors) }
+        const fields = { ...validateVisitorDetails(input), ...validateWalkIn(input, get().visitors) }
         if (!host) fields.hostEmployeeId = 'Choose the employee the visitor is here to see.'
         if (!host || hasErrors(fields)) return invalid(fields)
         return { ok: true, host }
       }
 
-      /** A desk-registered visit whose window opens now; callers set the status. */
-      const deskVisit = (input: WalkInInput, host: Employee, now: Date): VisitorRecord => ({
+      /** A lobby-registered visit whose window opens now; callers set the status. */
+      const lobbyVisit = (input: KioskRequestInput, host: Employee, office: string, now: Date): VisitorRecord => ({
         id: createId(),
         ...normalizeDetails(input),
         hostEmployeeId: host.id,
         hostEmployeeName: host.name,
         hostDepartment: host.department,
-        office: input.office?.trim() || OFFICES[0],
+        office,
         expectedDate: toIsoDate(now),
         timeWindowStart: now.toISOString(),
         timeWindowEnd: addMinutes(now, input.expectedDurationMinutes ?? DEFAULT_WALK_IN_MINUTES).toISOString(),
@@ -272,19 +278,17 @@ export const useVmsStore = create<VmsStore>()(
       }
 
       return {
-        currentUser: DEMO_USERS.GATEKEEPER,
         ...seedData(),
         settings: DEFAULT_SETTINGS,
         activeFilters: createDefaultFilters(),
 
-        switchRole: (role) => set({ currentUser: DEMO_USERS[role], activeFilters: createDefaultFilters() }),
         setFilters: (patch) => set((state) => ({ activeFilters: { ...state.activeFilters, ...patch } })),
         resetFilters: () => set({ activeFilters: createDefaultFilters() }),
 
         createPreApproval: (input) => {
-          const { currentUser } = get()
-          const denied = authorize(currentUser, 'visitor:pre-approve')
-          if (denied) return { ok: false, error: denied }
+          const who = signedInWith('visitor:pre-approve')
+          if (!who.ok) return who
+          const { user } = who
 
           const now = new Date()
           const fields = {
@@ -295,16 +299,16 @@ export const useVmsStore = create<VmsStore>()(
 
           const start = parseISO(input.timeWindowStart)
           const expectedDate = toIsoDate(start)
-          const overQuota = quotaError(currentUser.id, expectedDate)
+          const overQuota = quotaError(user.id, expectedDate)
           if (overQuota) return overQuota
 
           const record: VisitorRecord = {
             id: createId(),
             ...normalizeDetails(input),
-            hostEmployeeId: currentUser.id,
-            hostEmployeeName: currentUser.name,
-            hostDepartment: currentUser.department,
-            office: input.office?.trim() || OFFICES[0],
+            hostEmployeeId: user.id,
+            hostEmployeeName: user.name,
+            hostDepartment: user.department,
+            office: input.office?.trim() || user.office,
             expectedDate,
             timeWindowStart: start.toISOString(),
             timeWindowEnd: parseISO(input.timeWindowEnd).toISOString(),
@@ -319,40 +323,44 @@ export const useVmsStore = create<VmsStore>()(
             approvedAt: now.toISOString(),
             createdAt: now.toISOString(),
           }
-          return insert(record, 'PRE_APPROVED', `${describeWindow(record)} at ${record.office}`)
+          return insert(record, 'PRE_APPROVED', `${describeWindow(record)} at ${record.office}`, actorOf(user))
         },
 
         registerWalkInVisitor: (input) => {
-          const prepared = prepareDeskVisit(input)
-          if (!prepared.ok) return prepared
+          const who = signedInWith('visitor:register-walk-in')
+          if (!who.ok) return who
+          const checked = validateLobbyVisit(input)
+          if (!checked.ok) return checked
 
           const card = input.tempCardNumber?.trim().toUpperCase() || nextFreeCard(get().visitors)
           if (!card) return noFreeCard()
 
           const now = new Date()
           const record: VisitorRecord = {
-            ...deskVisit(input, prepared.host, now),
+            ...lobbyVisit(input, checked.host, who.user.office, now),
             status: 'CHECKED_IN',
             actualCheckInTime: now.toISOString(),
             tempCardNumber: card,
           }
-          return insert(record, 'WALK_IN_ADMITTED', `Admitted with ${card}; ${record.hostEmployeeName} notified`)
+          return insert(record, 'WALK_IN_ADMITTED', `Admitted with ${card}; ${record.hostEmployeeName} notified`, actorOf(who.user))
         },
 
         requestHostApproval: (input) => {
+          const who = signedInWith('visitor:register-walk-in')
+          if (!who.ok) return who
           // The card is issued at check-in, after the host approves.
           const request = { ...input, tempCardNumber: undefined }
-          const prepared = prepareDeskVisit(request)
-          if (!prepared.ok) return prepared
+          const checked = validateLobbyVisit(request)
+          if (!checked.ok) return checked
 
-          const record = deskVisit(request, prepared.host, new Date())
-          return insert(record, 'APPROVAL_REQUESTED', `Registered at the front desk; waiting on ${record.hostEmployeeName}`)
+          const record = lobbyVisit(request, checked.host, who.user.office, new Date())
+          return insert(record, 'APPROVAL_REQUESTED', `Registered at the front desk; waiting on ${record.hostEmployeeName}`, actorOf(who.user))
         },
 
         approveVisitor: (visitorId) => {
           const checked = authorizeTransition('visitor:approve', visitorId, 'PRE_APPROVED', 'approve')
           if (!checked.ok) return checked
-          const visitor = checked.data
+          const { visitor, user } = checked.data
           const now = new Date()
 
           if (hasLapsed(visitor, now)) {
@@ -368,29 +376,32 @@ export const useVmsStore = create<VmsStore>()(
             { ...visitor, status: 'PRE_APPROVED', approvedAt: now.toISOString() },
             'APPROVED',
             `Pass issued for ${describeWindow(visitor)}`,
+            actorOf(user),
           )
         },
 
         rejectVisitor: (visitorId, reason) => {
           const checked = authorizeTransition('visitor:reject', visitorId, 'REJECTED', 'reject')
           if (!checked.ok) return checked
+          const { visitor, user } = checked.data
 
           const trimmed = reason.trim()
           if (trimmed.length < 3) return invalid({ reason: 'Add a short reason so the front desk knows why.' })
           if (trimmed.length > 500) return invalid({ reason: 'Keep the reason under 500 characters.' })
 
-          const revoked = checked.data.status === 'PRE_APPROVED'
+          const revoked = visitor.status === 'PRE_APPROVED'
           return commit(
-            { ...checked.data, status: 'REJECTED', rejectionReason: trimmed },
+            { ...visitor, status: 'REJECTED', rejectionReason: trimmed },
             'REJECTED',
             `${revoked ? 'Pre-approval revoked' : 'Request denied'}: ${trimmed}`,
+            actorOf(user),
           )
         },
 
         checkInVisitor: (visitorId, capture = {}) => {
           const checked = authorizeTransition('visitor:check-in', visitorId, 'CHECKED_IN', 'check in')
           if (!checked.ok) return checked
-          const visitor = checked.data
+          const { visitor, user } = checked.data
           const now = new Date()
 
           const outsideWindow = checkInWindowError(visitor, now)
@@ -413,13 +424,14 @@ export const useVmsStore = create<VmsStore>()(
             },
             'CHECKED_IN',
             `Issued temp card ${card}`,
+            actorOf(user),
           )
         },
 
         checkOutVisitor: (visitorId) => {
           const checked = authorizeTransition('visitor:check-out', visitorId, 'CHECKED_OUT', 'check out')
           if (!checked.ok) return checked
-          const visitor = checked.data
+          const { visitor, user } = checked.data
           const now = new Date()
           const stayed = visitor.actualCheckInTime ? `; on site ${formatDuration(minutesBetween(visitor.actualCheckInTime, now))}` : ''
 
@@ -427,6 +439,59 @@ export const useVmsStore = create<VmsStore>()(
             { ...visitor, status: 'CHECKED_OUT', actualCheckOutTime: now.toISOString() },
             'CHECKED_OUT',
             `Returned temp card ${visitor.tempCardNumber ?? '-'}${stayed}`,
+            actorOf(user),
+          )
+        },
+
+        extendVisit: (visitorId, minutes) => {
+          const who = signedInWith('visitor:extend')
+          if (!who.ok) return who
+          const visitor = findVisitor(get().visitors, visitorId)
+          if (!visitor) return failure('NOT_FOUND', 'That visitor record no longer exists.')
+          const scoped = authorize(who.user, 'visitor:extend', visitor)
+          if (scoped) return { ok: false, error: scoped }
+          if (!isOnSite(visitor)) return failure('INVALID_TRANSITION', `Only visitors on site can have their stay extended.`)
+          if (!Number.isInteger(minutes) || minutes < 15 || minutes > 480) {
+            return invalid({ minutes: 'Extend by between 15 minutes and 8 hours.' })
+          }
+
+          // Extend from whichever is later, the current end or now, so an overstay gets the full extra time.
+          const now = new Date()
+          const end = parseISO(visitor.timeWindowEnd)
+          const newEnd = addMinutes(isAfter(now, end) ? now : end, minutes)
+          return commit(
+            { ...visitor, status: 'CHECKED_IN', timeWindowEnd: newEnd.toISOString() },
+            'VISIT_EXTENDED',
+            `Stay extended by ${formatDuration(minutes)}, now until ${formatTime(newEnd)}`,
+            actorOf(who.user),
+          )
+        },
+
+        submitKioskRequest: (input) => {
+          const checked = validateLobbyVisit(input)
+          if (!checked.ok) return checked
+
+          const record: VisitorRecord = { ...lobbyVisit(input, checked.host, KIOSK_SITE, new Date()), source: 'SELF_SERVICE' }
+          return insert(record, 'APPROVAL_REQUESTED', `Requested a visit with ${record.hostEmployeeName} at the kiosk`, KIOSK)
+        },
+
+        selfCheckIn: (passToken, photoUrl) => {
+          const { visitors } = get()
+          const visitor = findVisitorByPassToken(visitors, passToken)
+          if (!visitor) return failure('NOT_FOUND', PASS_NOT_FOUND)
+
+          const now = new Date()
+          const problem = selfCheckInProblem(visitor, KIOSK_SITE, now)
+          if (problem) return failure('INVALID_TRANSITION', problem)
+          if (!isPhoto(photoUrl)) return invalid({ photoUrl: 'Take a photo for your visitor badge.' })
+          const card = nextFreeCard(visitors)
+          if (!card) return noFreeCard()
+
+          return commit(
+            { ...visitor, status: 'CHECKED_IN', actualCheckInTime: now.toISOString(), tempCardNumber: card, photoUrl },
+            'CHECKED_IN',
+            `Self check-in with e-pass; temp card ${card}`,
+            KIOSK,
           )
         },
 
@@ -451,9 +516,9 @@ export const useVmsStore = create<VmsStore>()(
           ),
 
         updateSettings: (patch) => {
-          const { currentUser, settings } = get()
-          const denied = authorize(currentUser, 'settings:update')
-          if (denied) return { ok: false, error: denied }
+          const who = signedInWith('settings:update')
+          if (!who.ok) return who
+          const { settings } = get()
 
           const next = { ...settings, ...patch }
           const fields = validateSettings(next)
@@ -470,39 +535,42 @@ export const useVmsStore = create<VmsStore>()(
             `overstay grace ${settings.autoOverstayThresholdMinutes} → ${next.autoOverstayThresholdMinutes} min`
           set((state) => ({
             settings: next,
-            auditLog: withAudit(state.auditLog, [auditEntry('POLICY_UPDATED', actorOf(currentUser), null, detail)]),
+            auditLog: withAudit(state.auditLog, [auditEntry('POLICY_UPDATED', actorOf(who.user), null, detail)]),
           }))
           // A shorter grace period can tip visitors into overstay straight away.
           get().evaluateOverstayStatuses()
           return { ok: true, data: next }
         },
 
+        recordSecurityEvent: (action, user, detail) =>
+          set((state) => ({ auditLog: withAudit(state.auditLog, [auditEntry(action, actorOf(user), null, detail)]) })),
+
         resetDemoData: () => {
           const seed = seedData()
-          set((state) => ({
+          const user = getSessionUser()
+          set({
             visitors: seed.visitors,
             auditLog: withAudit(seed.auditLog, [
-              auditEntry('DATA_RESET', actorOf(state.currentUser), null, 'Restored the seeded visits, default policy and audit trail'),
+              auditEntry('DATA_RESET', user ? actorOf(user) : SYSTEM, null, 'Restored the seeded visits, default policy and audit trail'),
             ]),
             settings: DEFAULT_SETTINGS,
             activeFilters: createDefaultFilters(),
-          }))
+          })
         },
       }
     },
     {
-      name: 'vms-store',
-      version: 2,
-      storage: createJSONStorage(() => safeLocalStorage),
+      name: VMS_STORAGE_KEY,
+      version: 3,
+      storage: createJSONStorage(() => browserStorage('localStorage')),
       partialize: (state): PersistedVms => ({
-        role: state.currentUser.role,
         visitors: state.visitors,
         settings: state.settings,
         auditLog: state.auditLog,
       }),
-      // v1 records lack `office`, `approvedAt` and the audit trail; start those browsers on fresh demo data.
+      // v1 records lack `office`, `approvedAt` and the audit trail, so those start fresh.
+      // v2 also saved the demo role, which the tab's own session now replaces; merge ignores it.
       migrate: (persisted, version) => (version < 2 ? ({} as PersistedVms) : (persisted as PersistedVms)),
-      // Only the role is saved; the session is rebuilt from it so demo users stay in sync with the code.
       merge: (persisted, current) => {
         const saved = (persisted ?? {}) as Partial<PersistedVms>
         return {
@@ -510,7 +578,6 @@ export const useVmsStore = create<VmsStore>()(
           visitors: saved.visitors ?? current.visitors,
           auditLog: saved.auditLog ?? current.auditLog,
           settings: { ...current.settings, ...saved.settings },
-          currentUser: (saved.role && DEMO_USERS[saved.role]) || current.currentUser,
         }
       },
       // Visits may have lapsed or overstayed while the app was closed.

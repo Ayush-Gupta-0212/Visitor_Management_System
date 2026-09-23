@@ -9,9 +9,10 @@ import { useNow } from '@/hooks/useNow'
 import { approveAndNotify, checkInAndNotify } from '@/lib/feedback'
 import { formatRelative } from '@/lib/format'
 import { SOURCE_LABELS } from '@/lib/visitorRules'
+import { cn } from '@/lib/utils'
 import { useApprovedRequests, useDeniedRequests, usePendingRequests } from '@/store/hooks'
+import { useUser } from '@/store/useAuthStore'
 import { useUiStore } from '@/store/useUiStore'
-import { useVmsStore } from '@/store/useVmsStore'
 import type { VisitorRecord } from '@/types/vms'
 
 /**
@@ -20,7 +21,7 @@ import type { VisitorRecord } from '@/types/vms'
  * what was denied while the visitor may still be waiting at the gate.
  */
 export function NotificationBell() {
-  const role = useVmsStore((state) => state.currentUser.role)
+  const { role } = useUser()
   const openDetails = useUiStore((state) => state.openDetails)
   const now = useNow()
   const pending = usePendingRequests()
@@ -34,6 +35,10 @@ export function NotificationBell() {
   const readyToAdmit = isDesk ? approved : []
   const turnedAway = isDesk ? denied : []
   const count = pending.length + readyToAdmit.length + turnedAway.length
+
+  // Ring the bell each time something new needs attention (adjusting state during render, not in an effect).
+  const [ring, setRing] = useState({ count, times: 0 })
+  if (ring.count !== count) setRing({ count, times: count > ring.count ? ring.times + 1 : ring.times })
 
   const view = (visitor: VisitorRecord) => {
     setOpen(false)
@@ -50,11 +55,11 @@ export function NotificationBell() {
             className="relative"
             aria-label={count > 0 ? `Visitor requests, ${count} need attention` : 'Visitor requests'}
           >
-            <Bell />
+            <Bell key={ring.times} className={cn('origin-top', ring.times > 0 && 'animate-wiggle')} />
             {count > 0 && (
               <span
                 key={count}
-                className="absolute top-1 right-1 flex h-4 min-w-4 animate-pop-in items-center justify-center rounded-full bg-danger px-1 font-mono text-[10px] leading-none font-medium text-white"
+                className="absolute top-1 right-1 flex h-4 min-w-4 animate-pop-in items-center justify-center rounded-full bg-danger-strong px-1 font-mono text-[10px] leading-none font-medium text-surface ring-2 ring-surface"
               >
                 {count}
               </span>

@@ -1,6 +1,9 @@
 @import 'tailwindcss';
 @config '../tailwind.config.js';
 
+/* `dark:` utilities follow the .dark class that useThemeStore puts on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /*
  * Motion: every transition-* utility runs 120ms on the spec's precise curve.
  * These live here rather than in tailwind.config.js because the transition
@@ -16,8 +19,11 @@
  * Design tokens: "Precision Enterprise VMS" (Google Stitch project 7446685014118773496).
  * Values follow the DESIGN.md colour spec. tailwind.config.js exposes them as
  * utilities, e.g. bg-surface, text-muted-foreground, border-danger-border.
+ * The .dark block below redefines every token, so components need no dark: variants.
  */
 :root {
+  color-scheme: light;
+
   /* Canvas & surfaces */
   --background: #f8fafc; /* slate-50 · app backdrop */
   --surface: #ffffff; /* cards, tables, inputs, overlays */
@@ -67,6 +73,64 @@
   --neutral-strong: #475569; /* slate-600 */
   --neutral-border: #e2e8f0; /* slate-200 */
   --neutral-dot: #94a3b8; /* slate-400 */
+
+  /* Shadow colours for the hairline / raised / overlay elevations */
+  --elevation-hairline: rgb(0 0 0 / 0.05);
+  --elevation-raised: rgb(15 23 42 / 0.04);
+  --elevation-overlay: rgb(15 23 42 / 0.08);
+  --elevation-ring: rgb(15 23 42 / 0.06);
+}
+
+/* Dark theme: the same roles on a deep slate canvas, with translucent status tints. */
+.dark {
+  color-scheme: dark;
+
+  --background: #0b0e14;
+  --surface: #121722;
+  --surface-hover: #171d2a;
+  --muted: #1b2230;
+  --overlay: rgb(2 4 10 / 0.6);
+
+  --foreground: #e5e9f0;
+  --muted-foreground: #939bab;
+  --placeholder: #5f6778;
+
+  --border: #242b39;
+  --border-strong: #354055;
+
+  --primary: #e5e9f0;
+  --primary-hover: #ffffff;
+  --primary-foreground: #0b0e14;
+  --ring: #cbd2dd;
+
+  --success: #34d399;
+  --success-subtle: rgb(16 185 129 / 0.12);
+  --success-strong: #6ee7b7;
+  --success-border: rgb(52 211 153 / 0.28);
+  --success-dot: #34d399;
+
+  --warning: #fbbf24;
+  --warning-subtle: rgb(245 158 11 / 0.12);
+  --warning-strong: #fcd34d;
+  --warning-border: rgb(251 191 36 / 0.28);
+  --warning-dot: #fbbf24;
+
+  --danger: #fb7185;
+  --danger-subtle: rgb(244 63 94 / 0.13);
+  --danger-strong: #fda4af;
+  --danger-border: rgb(251 113 133 / 0.32);
+  --danger-dot: #fb7185;
+
+  --neutral: #94a3b8;
+  --neutral-subtle: rgb(148 163 184 / 0.1);
+  --neutral-strong: #cbd5e1;
+  --neutral-border: rgb(148 163 184 / 0.22);
+  --neutral-dot: #64748b;
+
+  --elevation-hairline: rgb(0 0 0 / 0.4);
+  --elevation-raised: rgb(0 0 0 / 0.35);
+  --elevation-overlay: rgb(0 0 0 / 0.55);
+  --elevation-ring: rgb(255 255 255 / 0.07);
 }
 
 @layer base {
@@ -74,10 +138,6 @@
   ::before,
   ::after {
     @apply border-border;
-  }
-
-  html {
-    color-scheme: light;
   }
 
   body {
@@ -89,6 +149,13 @@
   [role='button']:not(:disabled) {
     cursor: pointer;
   }
+}
+
+/* Theme switches reveal the new theme with a clip-path (see useThemeStore), so the default crossfade is off. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
 }
 
 /* Mono uppercase caption used for section labels, table headers and metadata keys. */

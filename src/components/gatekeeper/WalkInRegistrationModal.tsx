@@ -2,6 +2,7 @@ import { Info, Send, UserCheck } from 'lucide-react'
 import { type FormEvent, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { EmployeeCombobox } from '@/components/shared/EmployeeCombobox'
+import { PhotoCapture } from '@/components/shared/PhotoCapture'
 import { Button } from '@/components/ui/Button'
 import { Field } from '@/components/ui/Field'
 import { Input } from '@/components/ui/Input'
@@ -20,7 +21,6 @@ import {
 import { useUiStore } from '@/store/useUiStore'
 import { useVmsStore } from '@/store/useVmsStore'
 import type { VisitorType, WalkInInput } from '@/types/vms'
-import { PhotoCapture } from './PhotoCapture'
 
 const STAY_OPTIONS = [
   { minutes: '30', label: '30 minutes' },

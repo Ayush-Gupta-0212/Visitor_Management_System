@@ -54,15 +54,15 @@ export const SOURCE_LABELS: Record<VisitSource, string> = {
 
 /*
  *  PENDING_APPROVAL ──► PRE_APPROVED ──► CHECKED_IN ──► CHECKED_OUT
- *        │                  │                │               ▲
- *        ├──► REJECTED ◄────┤                └──► OVERSTAY ──┘
- *        └──► EXPIRED  ◄────┘
+ *        │                  │              ▲    │            ▲
+ *        ├──► REJECTED ◄────┤      extend  │    ▼            │
+ *        └──► EXPIRED  ◄────┘              └── OVERSTAY ─────┘
  */
 const TRANSITIONS: Record<VisitorStatus, readonly VisitorStatus[]> = {
   PENDING_APPROVAL: ['PRE_APPROVED', 'REJECTED', 'EXPIRED'],
   PRE_APPROVED: ['CHECKED_IN', 'REJECTED', 'EXPIRED'],
   CHECKED_IN: ['CHECKED_OUT', 'OVERSTAY'],
-  OVERSTAY: ['CHECKED_OUT'],
+  OVERSTAY: ['CHECKED_OUT', 'CHECKED_IN'], // back to CHECKED_IN when the desk extends the stay
   CHECKED_OUT: [],
   REJECTED: [],
   EXPIRED: [],
@@ -143,6 +143,30 @@ export function checkInWindowError(visitor: VisitorRecord, now: Date): string | 
   return null
 }
 
+/* Self check-in at the lobby kiosk */
+
+export const PASS_NOT_FOUND = "We couldn't find a pass with that code. Please see the front desk."
+
+/** What the kiosk tells a visitor whose pass can't be used for self check-in. */
+const SELF_CHECK_IN_BLOCKED: Record<Exclude<VisitorStatus, 'PRE_APPROVED'>, string> = {
+  PENDING_APPROVAL: "Your host hasn't approved this visit yet. Please see the front desk.",
+  CHECKED_IN: "You're already checked in. Enjoy your visit!",
+  OVERSTAY: "You're already checked in. Please see the front desk.",
+  CHECKED_OUT: 'This pass has already been used. Please see the front desk.',
+  REJECTED: 'This pass was revoked by your host. Please see the front desk.',
+  EXPIRED: 'This pass has expired. Please see the front desk.',
+}
+
+/**
+ * Why `visitor` can't check themselves in at the kiosk at `site` right now, or null
+ * if they can. The kiosk asks before taking the photo; the store asks again on submit.
+ */
+export function selfCheckInProblem(visitor: VisitorRecord, site: string, now: Date): string | null {
+  if (visitor.office !== site) return `This pass is for our ${visitor.office} office. Please see the front desk.`
+  if (visitor.status !== 'PRE_APPROVED') return SELF_CHECK_IN_BLOCKED[visitor.status]
+  return checkInWindowError(visitor, now)
+}
+
 /* Daily pre-approval quota */
 
 /**
@@ -193,6 +217,9 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PHONE_PATTERN = /^\+?[\d\s()-]+$/
 const PHOTO_PATTERN = /^(data:image\/|https?:\/\/)/
 
+/** A captured photo (data URI) or a hosted image URL. */
+export const isPhoto = (value: string) => PHOTO_PATTERN.test(value)
+
 const collapseSpaces = (text: string) => text.trim().replace(/\s+/g, ' ')
 
 /** Checks the details every registration path collects. Returns all problems at once. */
@@ -242,7 +269,7 @@ export function validateWalkIn(input: WalkInInput, visitors: readonly VisitorRec
   const minutes = input.expectedDurationMinutes ?? DEFAULT_WALK_IN_MINUTES
   const card = input.tempCardNumber?.trim().toUpperCase()
 
-  if (!PHOTO_PATTERN.test(input.photoUrl)) errors.photoUrl = "Capture the visitor's photo; it's mandatory at the desk."
+  if (!isPhoto(input.photoUrl)) errors.photoUrl = "Capture the visitor's photo; it's mandatory at the desk."
   if (!Number.isInteger(minutes) || minutes < 15 || minutes > 24 * 60) {
     errors.expectedDurationMinutes = 'Expected stay must be between 15 minutes and 24 hours.'
   }

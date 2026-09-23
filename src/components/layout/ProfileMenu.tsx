@@ -1,8 +1,9 @@
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, LogOut, Monitor, Moon, Sun, TabletSmartphone } from 'lucide-react'
 import { Avatar } from '@/components/ui/Avatar'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -10,17 +11,29 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/DropdownMenu'
 import { ROLE_LABELS } from '@/lib/rbac'
-import { switchPerspective } from '@/store/useUiStore'
-import { useVmsStore } from '@/store/useVmsStore'
-import { ROLE_OPTIONS } from './roles'
+import { KIOSK_HREF } from '@/lib/router'
+import { toast } from '@/lib/toast'
+import { signOut } from '@/store/session'
+import { useUser } from '@/store/useAuthStore'
+import { type ThemePreference, changeTheme, useThemeStore } from '@/store/useThemeStore'
+import { ROLE_ICONS } from './roles'
 
-/** Active user badge; its menu shows the session and doubles as a role switcher on small screens. */
+const THEMES = [
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+  { value: 'system', label: 'System', icon: Monitor },
+] as const
+
+/** The signed-in person: who they are, their theme, the visitor kiosk and sign-out. */
 export function ProfileMenu() {
-  const user = useVmsStore((state) => state.currentUser)
+  const user = useUser()
+  const preference = useThemeStore((state) => state.preference)
+  const RoleIcon = ROLE_ICONS[user.role]
 
-  const onRoleChange = (value: string) => {
-    const option = ROLE_OPTIONS.find((role) => role.value === value)
-    if (option) switchPerspective(option.value)
+  const leave = () => {
+    const firstName = user.name.split(' ')[0]
+    signOut()
+    toast.info(`Signed out. See you soon, ${firstName}.`)
   }
 
   return (
@@ -39,21 +52,40 @@ export function ProfileMenu() {
           <ChevronDown className="hidden size-3.5 text-muted-foreground lg:block" aria-hidden />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>
-          <span className="block text-body-md font-medium text-foreground">{user.name}</span>
-          <span className="block truncate text-body-sm text-muted-foreground">{user.email}</span>
-          <span className="mt-1 block text-body-sm text-muted-foreground">{user.department}</span>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="flex items-center gap-3 py-2">
+          <Avatar name={user.name} src={user.avatar} size="md" />
+          <span className="min-w-0">
+            <span className="block truncate text-body-md font-medium text-foreground">{user.name}</span>
+            <span className="block truncate text-body-sm text-muted-foreground">{user.email}</span>
+          </span>
         </DropdownMenuLabel>
+        <div className="mx-2 mb-2 flex flex-wrap items-center gap-1.5 text-body-sm text-muted-foreground">
+          <span className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-label-sm text-foreground">
+            <RoleIcon className="size-3" aria-hidden /> {ROLE_LABELS[user.role]}
+          </span>
+          <span className="truncate">
+            {user.department} · {user.office}
+          </span>
+        </div>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="eyebrow py-1">View as</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={user.role} onValueChange={onRoleChange}>
-          {ROLE_OPTIONS.map(({ value, label, icon: Icon }) => (
+        <DropdownMenuLabel className="eyebrow py-1">Theme</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={preference} onValueChange={(value) => changeTheme(value as ThemePreference)}>
+          {THEMES.map(({ value, label, icon: Icon }) => (
             <DropdownMenuRadioItem key={value} value={value}>
               <Icon /> {label}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <a href={KIOSK_HREF} target="_blank" rel="noreferrer">
+            <TabletSmartphone /> Open visitor kiosk
+          </a>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={leave} className="text-danger-strong data-highlighted:bg-danger-subtle [&_svg]:text-danger-strong">
+          <LogOut /> Sign out
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

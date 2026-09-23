@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react'
 import { visibleTo } from '@/lib/rbac'
 import { findVisitor } from '@/lib/visitorIndex'
 import type { VisitorRecord } from '@/types/vms'
+import { useSessionUser } from './useAuthStore'
 import { useVmsStore } from './useVmsStore'
 
 /*
@@ -12,11 +13,11 @@ import { useVmsStore } from './useVmsStore'
 
 const byWindowStart = (a: VisitorRecord, b: VisitorRecord) => a.timeWindowStart.localeCompare(b.timeWindowStart)
 
-/** Every visitor the current user may see (hosts: only their own). */
+/** Every visitor the signed-in user may see: all (admin), their site (gatekeeper) or their own guests (host). */
 export function useVisibleVisitors(): VisitorRecord[] {
   const visitors = useVmsStore((state) => state.visitors)
-  const currentUser = useVmsStore((state) => state.currentUser)
-  return useMemo(() => visibleTo(currentUser, visitors), [currentUser, visitors])
+  const user = useSessionUser()
+  return useMemo(() => visibleTo(user, visitors), [user, visitors])
 }
 
 /** One visitor by id, O(1) through the index built for the current list. */
